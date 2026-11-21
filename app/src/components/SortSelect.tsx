@@ -1,13 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  ArrowDownAZ,
-  Check,
-  ChevronDown,
-  Clock,
-  Flame,
-  Heart,
-  TrendingUp,
-} from "lucide-react";
+import { ArrowDownAZ, Check, ChevronDown, Clock, Flame, Heart, TrendingUp } from "lucide-react";
 import type { SortKey } from "@/lib/types";
 
 interface SortOption {
@@ -111,4 +103,3 @@ export function SortSelect({ value, onChange }: SortSelectProps) {
     </div>
   );
 }
-

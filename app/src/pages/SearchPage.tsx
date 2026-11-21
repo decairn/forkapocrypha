@@ -44,7 +44,10 @@ export function SearchPage() {
   }, [queryInput]);
 
   useEffect(() => {
-    api.listCategories().then(setCategories).catch(() => setCategories([]));
+    api
+      .listCategories()
+      .then(setCategories)
+      .catch(() => setCategories([]));
   }, []);
 
   const refreshInstalledSet = useCallback(async () => {
@@ -152,17 +155,14 @@ export function SearchPage() {
         }),
       );
       unlisteners.push(
-        await listen<{ dir_name: string; error: string }>(
-          "addon:uninstall:error",
-          (e) => {
-            setUninstallingDirs((prev) => {
-              const next = new Set(prev);
-              next.delete(e.payload.dir_name);
-              return next;
-            });
-            console.error("uninstall failed:", e.payload.error);
-          },
-        ),
+        await listen<{ dir_name: string; error: string }>("addon:uninstall:error", (e) => {
+          setUninstallingDirs((prev) => {
+            const next = new Set(prev);
+            next.delete(e.payload.dir_name);
+            return next;
+          });
+          console.error("uninstall failed:", e.payload.error);
+        }),
       );
     })();
     return () => unlisteners.forEach((fn) => fn());
@@ -178,14 +178,12 @@ export function SearchPage() {
   );
 
   const installedDirFor = useCallback(
-    (addon: Addon): string | null =>
-      installedByCatalogId.get(addon.id)?.dirName ?? null,
+    (addon: Addon): string | null => installedByCatalogId.get(addon.id)?.dirName ?? null,
     [installedByCatalogId],
   );
 
   const installedAtFor = useCallback(
-    (addon: Addon): string | null =>
-      installedByCatalogId.get(addon.id)?.installedAt ?? null,
+    (addon: Addon): string | null => installedByCatalogId.get(addon.id)?.installedAt ?? null,
     [installedByCatalogId],
   );
 
@@ -216,8 +214,7 @@ export function SearchPage() {
   );
 
   const empty = !loading && addons.length === 0 && total === 0;
-  const catalogEmpty =
-    !loading && !error && total === 0 && !debouncedQuery && !activeCategory;
+  const catalogEmpty = !loading && !error && total === 0 && !debouncedQuery && !activeCategory;
 
   const canLoadMore = total !== null && addons.length < total && !loading && !error;
 
@@ -228,8 +225,8 @@ export function SearchPage() {
     ? installingIds.has(selectedAddon.id)
       ? ({ kind: "installing" } as const)
       : isAddonInstalled(selectedAddon)
-      ? ({ kind: "installed" } as const)
-      : ({ kind: "install" } as const)
+        ? ({ kind: "installed" } as const)
+        : ({ kind: "install" } as const)
     : null;
 
   return (
@@ -294,11 +291,7 @@ export function SearchPage() {
               subtitle="Loading addons from your local catalog."
             />
           ) : error ? (
-            <CenteredState
-              title="Something went wrong."
-              subtitle={error}
-              tone="error"
-            />
+            <CenteredState title="Something went wrong." subtitle={error} tone="error" />
           ) : catalogEmpty ? (
             <CenteredState
               title="The catalog is empty."
@@ -396,9 +389,7 @@ function CenteredState({
         >
           {title}
         </p>
-        {subtitle ? (
-          <p className="mt-2 text-sm text-[var(--color-outline)]">{subtitle}</p>
-        ) : null}
+        {subtitle ? <p className="mt-2 text-sm text-[var(--color-outline)]">{subtitle}</p> : null}
       </div>
     </div>
   );

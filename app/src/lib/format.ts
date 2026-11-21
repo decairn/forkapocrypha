@@ -15,8 +15,7 @@ export function formatBytes(n: number): string {
 
 export function formatRelativeTime(input: string | number | null): string {
   if (!input) return "never";
-  const date =
-    typeof input === "number" ? new Date(input * 1000) : new Date(input);
+  const date = typeof input === "number" ? new Date(input * 1000) : new Date(input);
   if (Number.isNaN(date.getTime())) return "unknown";
   const diff = Date.now() - date.getTime();
   const minutes = Math.floor(diff / 60_000);

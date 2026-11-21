@@ -1,14 +1,7 @@
 import { useCallback, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import {
-  AlertTriangle,
-  ArrowUpCircle,
-  Check,
-  Loader2,
-  RefreshCw,
-  RotateCcw,
-} from "lucide-react";
+import { AlertTriangle, ArrowUpCircle, Check, Loader2, RefreshCw, RotateCcw } from "lucide-react";
 
 type Status =
   | { kind: "idle" }

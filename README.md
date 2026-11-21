@@ -74,7 +74,7 @@ A few things Apocrypha tries to do well:
 ## Tech stack
 
 - **[Tauri 2](https://tauri.app/)** + **Rust** — native window, signed bundles, ~10 MB binary
-- **React 19** + **TypeScript** + **Vite** — UI
+- **React 19** + **TypeScript** + **[Vite+](https://viteplus.dev/)** — UI
 - **Tailwind 4** + shadcn/ui patterns + **Lucide** icons — design system
 - **SQLite** (via `rusqlite`) — local catalog mirror
 - **reqwest** + **tokio** — async HTTP and background tasks

@@ -1,12 +1,5 @@
 import { useState } from "react";
-import {
-  Check,
-  Download,
-  DownloadCloud,
-  Heart,
-  Loader2,
-  Trash2,
-} from "lucide-react";
+import { Check, Download, DownloadCloud, Heart, Loader2, Trash2 } from "lucide-react";
 import type { Addon } from "@/lib/types";
 import { formatCount, formatRelativeTime } from "@/lib/format";
 import { CategoryIcon } from "@/components/CategoryIcon";
@@ -151,9 +144,7 @@ export function AddonRow({
         }
       }}
       className={`group flex items-center gap-4 border-b border-[var(--color-border)] px-5 py-3 transition-colors last:border-b-0 ${
-        selected
-          ? "bg-[var(--color-surface-container)]"
-          : "hover:bg-[var(--color-surface-low)]"
+        selected ? "bg-[var(--color-surface-container)]" : "hover:bg-[var(--color-surface-low)]"
       } ${onSelect ? "cursor-pointer" : ""}`}
     >
       <AddonThumb addon={addon} />

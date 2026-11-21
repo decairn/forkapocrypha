@@ -86,17 +86,14 @@ export function InstalledPage() {
         }),
       );
       unlisteners.push(
-        await listen<{ dir_name: string; error: string }>(
-          "addon:uninstall:error",
-          (e) => {
-            setUninstalling((prev) => {
-              const next = new Set(prev);
-              next.delete(e.payload.dir_name);
-              return next;
-            });
-            console.error("uninstall failed:", e.payload.error);
-          },
-        ),
+        await listen<{ dir_name: string; error: string }>("addon:uninstall:error", (e) => {
+          setUninstalling((prev) => {
+            const next = new Set(prev);
+            next.delete(e.payload.dir_name);
+            return next;
+          });
+          console.error("uninstall failed:", e.payload.error);
+        }),
       );
     })();
     return () => unlisteners.forEach((fn) => fn());
@@ -148,10 +145,7 @@ export function InstalledPage() {
     [addons],
   );
 
-  const unusedLibs = useMemo(
-    () => addons?.filter((a) => a.unused_lib).length ?? 0,
-    [addons],
-  );
+  const unusedLibs = useMemo(() => addons?.filter((a) => a.unused_lib).length ?? 0, [addons]);
 
   const filteredAddons = useMemo(() => {
     if (!addons) return null;
@@ -236,7 +230,8 @@ export function InstalledPage() {
                   {bulkProgress ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />
-                      Updating {Math.min(bulkProgress.done + 1, bulkProgress.total)} of {bulkProgress.total}
+                      Updating {Math.min(bulkProgress.done + 1, bulkProgress.total)} of{" "}
+                      {bulkProgress.total}
                     </>
                   ) : (
                     <>
@@ -347,12 +342,8 @@ function EmptyState({
     <div className="grid h-full place-items-center rounded-lg border border-dashed border-[var(--color-border)] text-center">
       <div className="max-w-md px-6">
         {icon ? <div className="mb-3 flex justify-center">{icon}</div> : null}
-        <p className="text-lg font-medium text-[var(--color-on-surface-variant)]">
-          {title}
-        </p>
-        {subtitle ? (
-          <p className="mt-2 text-sm text-[var(--color-outline)]">{subtitle}</p>
-        ) : null}
+        <p className="text-lg font-medium text-[var(--color-on-surface-variant)]">{title}</p>
+        {subtitle ? <p className="mt-2 text-sm text-[var(--color-outline)]">{subtitle}</p> : null}
       </div>
     </div>
   );

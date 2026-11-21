@@ -27,9 +27,7 @@ function SettingSection({
           <h2 className="text-sm font-medium uppercase tracking-[0.14em] text-[var(--color-on-surface)]">
             {title}
           </h2>
-          <p className="mt-2 text-sm text-[var(--color-on-surface-variant)]">
-            {description}
-          </p>
+          <p className="mt-2 text-sm text-[var(--color-on-surface-variant)]">{description}</p>
         </div>
         <div className="space-y-3">{children}</div>
       </div>
@@ -44,8 +42,14 @@ export function SettingsPage() {
   const [syncError, setSyncError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.getAddonsDir().then(setAddonsDir).catch(() => {});
-    api.catalogMeta().then(setMeta).catch(() => {});
+    api
+      .getAddonsDir()
+      .then(setAddonsDir)
+      .catch(() => {});
+    api
+      .catalogMeta()
+      .then(setMeta)
+      .catch(() => {});
   }, []);
 
   async function handleSync() {
@@ -88,10 +92,7 @@ export function SettingsPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <PageHeader
-        title="Settings"
-        subtitle="Configure paths, automation, and diagnostics."
-      />
+      <PageHeader title="Settings" subtitle="Configure paths, automation, and diagnostics." />
 
       <div className="flex-1 overflow-y-auto px-10 pb-12">
         <SettingSection
@@ -114,10 +115,7 @@ export function SettingsPage() {
           </div>
         </SettingSection>
 
-        <SettingSection
-          title="Catalog"
-          description="Synchronization with the ESOUI archive."
-        >
+        <SettingSection title="Catalog" description="Synchronization with the ESOUI archive.">
           <div className="flex items-center justify-between gap-4">
             <div className="text-sm text-[var(--color-on-surface)]">
               <div>
@@ -144,9 +142,7 @@ export function SettingsPage() {
               )}
             </button>
           </div>
-          {syncError ? (
-            <p className="text-xs text-[var(--color-error)]">{syncError}</p>
-          ) : null}
+          {syncError ? <p className="text-xs text-[var(--color-error)]">{syncError}</p> : null}
         </SettingSection>
 
         <SettingSection
@@ -177,19 +173,14 @@ export function SettingsPage() {
           <UpdaterPanel />
         </SettingSection>
 
-        <SettingSection
-          title="About"
-          description="Version, links, and credits."
-        >
+        <SettingSection title="About" description="Version, links, and credits.">
           <div className="space-y-3 text-base text-[var(--color-on-surface-variant)]">
             <p>Apocrypha v{__APP_VERSION__}</p>
             <p className="text-sm text-[var(--color-outline)]">
               Built with Tauri 2, Rust, React, and Tailwind.
             </p>
             <button
-              onClick={() =>
-                openUrl("https://github.com/VitorTaichou/apocrypha").catch(() => {})
-              }
+              onClick={() => openUrl("https://github.com/VitorTaichou/apocrypha").catch(() => {})}
               className="inline-flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-low)] px-3.5 py-1.5 text-xs font-medium text-[var(--color-on-surface-variant)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]"
             >
               <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} />

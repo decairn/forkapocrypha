@@ -14,9 +14,7 @@ export function PageHeader({ title, subtitle, actions }: PageHeaderProps) {
           {title}
         </h1>
         {subtitle ? (
-          <p className="mt-2 text-base text-[var(--color-on-surface-variant)]">
-            {subtitle}
-          </p>
+          <p className="mt-2 text-base text-[var(--color-on-surface-variant)]">{subtitle}</p>
         ) : null}
       </div>
       {actions ? <div className="flex items-center gap-2">{actions}</div> : null}

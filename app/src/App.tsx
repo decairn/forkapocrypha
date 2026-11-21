@@ -53,16 +53,13 @@ function App() {
         }),
       );
       unlisteners.push(
-        await listen<{ dir_name: string; error: string }>(
-          "addon:uninstall:error",
-          (e) => {
-            pushToast({
-              tone: "error",
-              title: `Couldn't uninstall ${e.payload.dir_name}`,
-              body: e.payload.error,
-            });
-          },
-        ),
+        await listen<{ dir_name: string; error: string }>("addon:uninstall:error", (e) => {
+          pushToast({
+            tone: "error",
+            title: `Couldn't uninstall ${e.payload.dir_name}`,
+            body: e.payload.error,
+          });
+        }),
       );
     })();
 
@@ -85,9 +82,7 @@ function App() {
         </div>
       </main>
       <Toaster toasts={toasts} onDismiss={dismissToast} />
-      {showWelcome ? (
-        <WelcomeScreen onDismiss={() => setShowWelcome(false)} />
-      ) : null}
+      {showWelcome ? <WelcomeScreen onDismiss={() => setShowWelcome(false)} /> : null}
     </div>
   );
 }

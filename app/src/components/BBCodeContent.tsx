@@ -54,10 +54,7 @@ function renderBlock(block: BlockNode, key: number) {
         <ul key={key} className="space-y-1.5">
           {block.items.map((item, j) => (
             <li key={j} className="flex gap-2">
-              <span
-                aria-hidden
-                className="select-none text-[var(--color-primary)]/70"
-              >
+              <span aria-hidden className="select-none text-[var(--color-primary)]/70">
                 •
               </span>
               <span className="min-w-0 flex-1">{renderInline(item)}</span>
@@ -68,10 +65,7 @@ function renderBlock(block: BlockNode, key: number) {
 
     case "hr":
       return (
-        <hr
-          key={key}
-          className="my-2 border-0 border-t border-[var(--color-outline-variant)]/40"
-        />
+        <hr key={key} className="my-2 border-0 border-t border-[var(--color-outline-variant)]/40" />
       );
 
     case "paragraph":

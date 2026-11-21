@@ -18,10 +18,7 @@ export function WindowBehaviorPanel() {
     let alive = true;
     (async () => {
       try {
-        const [a, c] = await Promise.all([
-          isAutostartEnabled(),
-          api.getCloseToTray(),
-        ]);
+        const [a, c] = await Promise.all([isAutostartEnabled(), api.getCloseToTray()]);
         if (alive) {
           setAutostart(a);
           setCloseToTray(c);

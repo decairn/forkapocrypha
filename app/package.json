@@ -1,12 +1,12 @@
 {
   "name": "apocrypha",
-  "private": true,
   "version": "0.1.14",
+  "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
+    "dev": "vp dev",
+    "build": "tsc && vp build",
+    "preview": "vp preview",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -29,9 +29,13 @@
     "@types/node": "^25.9.1",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
+    "@vitejs/plugin-react": "^6.1.0",
     "tailwindcss": "^4.3.0",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "npm:@voidzero-dev/vite-plus-core@8.3.8000",
+    "vite-plus": "1.7.0"
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@8.3.8000"
   }
 }
