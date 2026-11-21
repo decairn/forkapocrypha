@@ -13,7 +13,10 @@ import { AddonDetailPanel } from "@/components/AddonDetailPanel";
 import { api } from "@/lib/api";
 import type { Addon, InstalledAddon } from "@/lib/types";
 
-export function InstalledPage({ onUninstall }: { onUninstall: (dirName: string) => Promise<boolean> }) {
+export function InstalledPage({ onInstall, onUninstall }: {
+  onInstall: (addonId: string) => Promise<string[]>;
+  onUninstall: (dirName: string) => Promise<boolean>;
+}) {
   const [addons, setAddons] = useState<InstalledAddon[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -125,11 +128,11 @@ export function InstalledPage({ onUninstall }: { onUninstall: (dirName: string) 
   const handleUpdate = useCallback(async (addon: InstalledAddon) => {
     if (!addon.catalog_id) return;
     try {
-      await api.installAddon(addon.catalog_id);
+      await onInstall(addon.catalog_id);
     } catch (e) {
       console.error(e);
     }
-  }, []);
+  }, [onInstall]);
 
   const handleSelect = useCallback(async (addon: InstalledAddon) => {
     if (!addon.catalog_id) return;
@@ -174,14 +177,14 @@ export function InstalledPage({ onUninstall }: { onUninstall: (dirName: string) 
     for (let i = 0; i < toUpdate.length; i++) {
       const addon = toUpdate[i];
       try {
-        await api.installAddon(addon.catalog_id!);
+        await onInstall(addon.catalog_id!);
       } catch (e) {
         console.error(`update failed for ${addon.title}:`, e);
       }
       setBulkProgress({ done: i + 1, total: toUpdate.length });
     }
     setBulkProgress(null);
-  }, [addons]);
+  }, [addons, onInstall]);
 
   // Re-resolve selectedInstalled against the latest list so the panel reflects fresh data
   // (version bumps, update_available flips) without the user having to reopen it.
