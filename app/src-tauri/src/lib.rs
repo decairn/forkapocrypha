@@ -41,24 +41,10 @@ fn can_auto_update() -> bool {
 
 async fn refresh_catalog_for_auto_update(handle: &tauri::AppHandle) -> bool {
     let state = handle.state::<AppState>();
-    if state.is_syncing() {
-        eprintln!("catalog sync already in progress; skipping automatic update check");
-        return false;
-    }
-
-    let _ = handle.emit("catalog:sync:start", ());
-    match state.run_sync().await {
-        Ok(meta) => {
-            let _ = handle.emit("catalog:sync:done", &meta);
-            true
-        }
+    match state.run_sync(handle).await {
+        Ok(_) => true,
         Err(error) => {
-            if error.to_string() == state::SYNC_IN_PROGRESS_ERROR {
-                eprintln!("catalog sync already in progress; skipping automatic update check");
-            } else {
-                eprintln!("automatic catalog refresh failed: {error:#}");
-                let _ = handle.emit("catalog:sync:error", error.to_string());
-            }
+            eprintln!("automatic catalog refresh failed; skipping update check: {error:#}");
             false
         }
     }
@@ -192,14 +178,8 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = handle.state::<AppState>();
-                let _ = handle.emit("catalog:sync:start", ());
-                match state.run_sync().await {
-                    Ok(meta) => {
-                        let _ = handle.emit("catalog:sync:done", &meta);
-                    }
-                    Err(e) => {
-                        let _ = handle.emit("catalog:sync:error", e.to_string());
-                    }
+                if let Err(error) = state.run_sync(&handle).await {
+                    eprintln!("startup catalog refresh failed: {error:#}");
                 }
             });
 
