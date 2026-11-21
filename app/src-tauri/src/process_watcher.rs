@@ -5,8 +5,8 @@ use sysinfo::System;
 ///
 /// Matches the standard ESO process names on Windows and through Proton on
 /// Linux/Steam Deck (where Proton runs the same Windows `eso64.exe` binary).
-pub fn is_eso_running() -> bool {
-    let system = System::new_all();
+pub fn is_eso_running() -> Result<bool, sysinfo::Error> {
+    let system = System::new_all()?;
 
     for (_, process) in system.processes() {
         let name = process.name().to_string_lossy().to_lowercase();
@@ -16,8 +16,8 @@ pub fn is_eso_running() -> bool {
             || name == "eso"
             || name.starts_with("eso64.")
         {
-            return true;
+            return Ok(true);
         }
     }
-    false
+    Ok(false)
 }
