@@ -271,18 +271,7 @@ pub async fn sync_catalog(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<CatalogMeta> {
-    let _ = app.emit("catalog:sync:start", ());
-    match state.run_sync().await {
-        Ok(meta) => {
-            let _ = app.emit("catalog:sync:done", &meta);
-            Ok(meta)
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            let _ = app.emit("catalog:sync:error", &msg);
-            Err(msg)
-        }
-    }
+    state.run_sync(&app).await.map_err(map_err)
 }
 
 /// Compare two version strings by their numeric tokens only, ignoring

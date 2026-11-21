@@ -544,8 +544,8 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU64};
     use zip::write::SimpleFileOptions;
 
-    #[tokio::test]
-    async fn uninstall_waits_for_other_addon_filesystem_mutations() -> Result<()> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_uninstalls_serialize_through_the_mutation_path() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let addons_dir = temp.path().join("AddOns");
         let addon_dir = addons_dir.join("Example");
@@ -562,15 +562,26 @@ mod tests {
             auto_update_interval_minutes: AtomicU64::new(0),
         });
 
-        let mutation_guard = state.addon_fs_mutations.lock().await;
-        let uninstall_state = state.clone();
-        let uninstall =
-            tokio::spawn(async move { uninstall_addon(&uninstall_state, "Example").await });
-        tokio::task::yield_now().await;
-        assert!(addon_dir.exists());
+        let start = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+        let first_state = state.clone();
+        let first_start = start.clone();
+        let first = tokio::spawn(async move {
+            first_start.wait().await;
+            uninstall_addon(&first_state, "Example").await
+        });
+        let second_state = state.clone();
+        let second_start = start.clone();
+        let second = tokio::spawn(async move {
+            second_start.wait().await;
+            uninstall_addon(&second_state, "Example").await
+        });
+        start.wait().await;
 
-        drop(mutation_guard);
-        uninstall.await??;
+        let first = first.await?;
+        let second = second.await?;
+        assert_ne!(first.is_ok(), second.is_ok());
+        let failure = first.err().or_else(|| second.err()).unwrap();
+        assert!(failure.to_string().contains("addon directory not found"));
         assert!(!addon_dir.exists());
         Ok(())
     }
