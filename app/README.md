@@ -5,6 +5,8 @@ manager. The user-facing documentation, downloads, install instructions
 and screenshots live in the repo root [README.md](../README.md). The
 architectural deep-dive lives in [CLAUDE.md](../CLAUDE.md).
 Vite+ provides the frontend dev and build toolchain.
+Use Node.js 22.18 or later in the 22.x line, 24.11 or later in 24.x,
+or 26 or later; CI uses Node.js 24.
 
 ## Quick dev
 

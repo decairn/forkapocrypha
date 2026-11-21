@@ -86,6 +86,9 @@ Catalog data comes from the official [ESOUI](https://www.esoui.com/) site via th
 
 ## Building from source
 
+Use Node.js 22.18 or later in the 22.x line, 24.11 or later in 24.x,
+or 26 or later.
+
 ```bash
 git clone https://github.com/VitorTaichou/apocrypha
 cd apocrypha/app
