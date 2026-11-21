@@ -55,12 +55,9 @@ When manifest resolution picks a row that disagrees with the existing pin, the c
 
 ### Update detection (same function)
 
-`update_available` is the OR of two independent signals:
+For an unchanged, tracked manifest, compare the current listing's exact `UIVersion` and `last_updated` with the values recorded for the installed package in `.apocrypha-ownership.json`. A listing version change at the same timestamp or a re-publish with the same version both offer updates.
 
-- **Marker signal** — catalog `last_updated` moved since we installed (caught by the `installed:{catalog_id}` marker written at install time). Catches authors who re-publish on ESOUI without bumping the manifest `## Version:` string.
-- **Version signal** — local manifest `## Version:` differs from the catalog's UIVersion. Catches the opposite: authors who bump the listing without re-uploading the file (and zips that ship a stale manifest).
-
-Either signal diverging means an update is needed. Mirrors Minion's behavior.
+On upgrade, the catalog database saves the cached listing version for legacy install markers that match the cached timestamp. This baseline also requires an unchanged, tracked manifest. Without a verified package record, update detection falls back to comparing the local manifest version and using legacy timestamps where available.
 
 ### React frontend (`app/src/`)
 
@@ -102,7 +99,7 @@ Design rule: Newsreader is reserved for the "APOCRYPHA" wordmark in the sidebar.
 - **PowerShell wraps cargo stderr**: `cargo` writes progress to stderr, and PowerShell tags it as `NativeCommandError` even on success. Look at the "Finished" line and exit code, not the stderr wrapping.
 - **PATH refresh**: After `winget install`-ing new tools, the current shell session has a stale PATH. Refresh inline: `$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')`. Most PowerShell commands in this workspace prefix this.
 - **MMOUI API has no pagination and no server-side search**. The full catalog (5–10 MB JSON) is downloaded every sync. This is why the local SQLite mirror exists — other addon managers built on the same API take the same approach.
-- **Manifest version vs catalog version differ regularly**. The author's `## Version:` inside `Foo.txt`/`Foo.addon` is independent of MMOUI's `UIVersion`. Update detection compares the local manifest string against `UIVersion` after normalising leading `v`/`V`.
+- **Manifest and catalog versions differ regularly**. The author's `## Version:` inside `Foo.txt`/`Foo.addon` is independent of MMOUI's `UIVersion`. Fallback comparisons normalize separators and prefixes while preserving the digits in each component.
 - **Legacy installs have unknown file ownership.** Manual updates prompt with a conflict list and retain backups before adopting affected files; never infer ownership from a shared root. Legacy uninstall requires explicit selection and backs up only selected untracked files; tracked, unselected, and outside-root files remain. A leftover `.apocrypha-install-*` directory blocks further mutations until its backups are recovered and the directory moved outside AddOns.
 - **Bundle size**: production build is ~265 KB JS, ~20 KB CSS, ~10 MB Rust binary. Stay frugal with new lucide icons (~1 KB each, but they add up if imported broadly).
 
