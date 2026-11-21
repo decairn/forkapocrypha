@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { ChevronDown, Loader2, Search as SearchIcon } from "lucide-react";
+import { ChevronDown, CircleCheck, CircleMinus, ListFilter, Loader2, Search as SearchIcon } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { AddonRow } from "@/components/AddonRow";
 import { CategorySelect } from "@/components/CategorySelect";
+import { SearchSelect } from "@/components/SearchSelect";
 import { SortSelect } from "@/components/SortSelect";
 import { AddonDetailPanel } from "@/components/AddonDetailPanel";
 import { api } from "@/lib/api";
@@ -11,17 +12,18 @@ import { getCategoryMeta } from "@/lib/categoryMeta";
 import type { Addon, Category, SortKey } from "@/lib/types";
 
 const PAGE_SIZE = 30;
+type InstallationStatus = "both" | "installed" | "not-installed";
 
 export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => Promise<boolean> }) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [activeCategory, setActiveCategory] = useState<string>("");
   const [sortBy, setSortBy] = useState<SortKey>("download_total");
+  const [installationStatus, setInstallationStatus] = useState<InstallationStatus>("both");
   const [queryInput, setQueryInput] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
 
   const [addons, setAddons] = useState<Addon[]>([]);
   const [total, setTotal] = useState<number | null>(null);
-  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +37,9 @@ export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => 
   // when only one is actually on disk.
   const [installedByCatalogId, setInstalledByCatalogId] = useState<
     Map<string, { dirName: string; installedAt: string | null }>
-  >(new Map());
+  >();
+  const [installedError, setInstalledError] = useState<string | null>(null);
+  const installedRequest = useRef(0);
   const [selectedAddon, setSelectedAddon] = useState<Addon | null>(null);
 
   useEffect(() => {
@@ -51,8 +55,10 @@ export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => 
   }, []);
 
   const refreshInstalledSet = useCallback(async () => {
+    const request = ++installedRequest.current;
     try {
       const list = await api.listInstalled();
+      if (request !== installedRequest.current) return;
       const next = new Map<string, { dirName: string; installedAt: string | null }>();
       for (const a of list) {
         if (a.catalog_id) {
@@ -63,8 +69,9 @@ export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => 
         }
       }
       setInstalledByCatalogId(next);
-    } catch {
-      // empty
+      setInstalledError(null);
+    } catch (e) {
+      if (request === installedRequest.current) setInstalledError(String(e));
     }
   }, []);
 
@@ -72,13 +79,31 @@ export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => 
     refreshInstalledSet();
   }, [refreshInstalledSet]);
 
-  // Whenever the filter/sort changes, reset paging back to page 1.
-  useEffect(() => {
-    setPage(1);
-  }, [debouncedQuery, activeCategory, sortBy]);
+  const filterByInstallation = installationStatus !== "both";
+  const installedForFilter = filterByInstallation ? installedByCatalogId : undefined;
+  const installationError = filterByInstallation ? installedError : null;
+  const waitingForInstalled = filterByInstallation && !installedForFilter;
+  const searchParams = useMemo(
+    () => ({
+      query: debouncedQuery || undefined,
+      categoryId: activeCategory || undefined,
+      sortBy,
+      limit: PAGE_SIZE,
+      installationFilter: installedForFilter
+        ? {
+            installed: installationStatus === "installed",
+            catalogIds: Array.from(installedForFilter.keys()),
+          }
+        : undefined,
+    }),
+    [debouncedQuery, activeCategory, sortBy, installationStatus, installedForFilter],
+  );
+  const [pagination, setPagination] = useState({ searchParams, page: 1 });
+  const page = pagination.searchParams === searchParams ? pagination.page : 1;
 
   // Fetch the current page. Page 1 replaces; later pages append.
   useEffect(() => {
+    if (waitingForInstalled || installationError) return;
     let alive = true;
     if (page === 1) {
       setLoading(true);
@@ -87,13 +112,7 @@ export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => 
     }
     setError(null);
     api
-      .searchAddons({
-        query: debouncedQuery || undefined,
-        categoryId: activeCategory || undefined,
-        sortBy,
-        page,
-        limit: PAGE_SIZE,
-      })
+      .searchAddons({ ...searchParams, page })
       .then((r) => {
         if (!alive) return;
         setTotal(r.total);
@@ -110,7 +129,7 @@ export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => 
     return () => {
       alive = false;
     };
-  }, [page, debouncedQuery, activeCategory, sortBy]);
+  }, [page, searchParams, waitingForInstalled, installationError]);
 
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
@@ -163,6 +182,7 @@ export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => 
             return next;
           });
           console.error("uninstall failed:", e.payload.error);
+          refreshInstalledSet();
         }),
       );
     })();
@@ -174,23 +194,23 @@ export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => 
   }, []);
 
   const isAddonInstalled = useCallback(
-    (addon: Addon) => installedByCatalogId.has(addon.id),
+    (addon: Addon) => installedByCatalogId?.has(addon.id) ?? false,
     [installedByCatalogId],
   );
 
   const installedDirFor = useCallback(
-    (addon: Addon): string | null => installedByCatalogId.get(addon.id)?.dirName ?? null,
+    (addon: Addon): string | null => installedByCatalogId?.get(addon.id)?.dirName ?? null,
     [installedByCatalogId],
   );
 
   const installedAtFor = useCallback(
-    (addon: Addon): string | null => installedByCatalogId.get(addon.id)?.installedAt ?? null,
+    (addon: Addon): string | null => installedByCatalogId?.get(addon.id)?.installedAt ?? null,
     [installedByCatalogId],
   );
 
   const handleUninstall = useCallback(
     async (addon: Addon) => {
-      const dir = installedByCatalogId.get(addon.id)?.dirName;
+      const dir = installedByCatalogId?.get(addon.id)?.dirName;
       if (!dir) return;
       setUninstallingDirs((prev) => {
         const next = new Set(prev);
@@ -214,14 +234,16 @@ export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => 
 
   const isAddonUninstalling = useCallback(
     (addon: Addon) => {
-      const dir = installedByCatalogId.get(addon.id)?.dirName;
+      const dir = installedByCatalogId?.get(addon.id)?.dirName;
       return dir ? uninstallingDirs.has(dir) : false;
     },
     [installedByCatalogId, uninstallingDirs],
   );
 
   const empty = !loading && addons.length === 0 && total === 0;
-  const catalogEmpty = !loading && !error && total === 0 && !debouncedQuery && !activeCategory;
+  const catalogEmpty = empty && !debouncedQuery && !activeCategory && !filterByInstallation;
+  const searchError = installationError ?? error;
+  const showLoading = loading || waitingForInstalled;
 
   const canLoadMore = total !== null && addons.length < total && !loading && !error;
 
@@ -238,25 +260,38 @@ export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => 
 
   return (
     <div className="flex h-full">
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="@container flex min-w-0 flex-1 flex-col">
         <PageHeader
           title="Search"
           subtitle={
-            total !== null
+            total !== null && !searchError && !showLoading
               ? `Showing ${addons.length.toLocaleString()} of ${total.toLocaleString()} addons.`
               : "Browse the arcane catalog of ESO addons."
           }
         />
 
-        <div className="flex items-center gap-3 px-10 pt-8">
-          <div className="relative flex-1">
-            <SearchIcon className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[var(--color-outline)]" />
-            <input
-              type="text"
-              value={queryInput}
-              onChange={(e) => setQueryInput(e.target.value)}
-              placeholder="Search addons..."
-              className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-lowest)] py-3.5 pl-12 pr-4 text-base text-[var(--color-on-surface)] placeholder:text-[var(--color-outline)] focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
+        <div className="flex flex-wrap items-center gap-3 px-4 pt-8 @2xl:px-10 [&>*]:max-w-full">
+          <div className="flex min-w-0 flex-[1_1_20rem] items-center gap-3">
+            <div className="relative min-w-0 flex-1">
+              <SearchIcon className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[var(--color-outline)]" />
+              <input
+                type="text"
+                value={queryInput}
+                onChange={(e) => setQueryInput(e.target.value)}
+                placeholder="Search addons..."
+                className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-lowest)] py-3.5 pl-12 pr-4 text-base text-[var(--color-on-surface)] placeholder:text-[var(--color-outline)] focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
+              />
+            </div>
+            <SearchSelect<InstallationStatus>
+              label="Installation status"
+              value={installationStatus}
+              onChange={setInstallationStatus}
+              widthClass="w-44 max-w-[65%]"
+              options={[
+                { key: "both", label: "Both", icon: ListFilter },
+                { key: "installed", label: "Installed", icon: CircleCheck },
+                { key: "not-installed", label: "Not Installed", icon: CircleMinus },
+              ]}
             />
           </div>
 
@@ -291,14 +326,14 @@ export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => 
         ) : null}
 
         <div className="flex-1 overflow-y-auto px-10 py-6">
-          {loading ? (
+          {searchError ? (
+            <CenteredState title="Something went wrong." subtitle={searchError} tone="error" />
+          ) : showLoading ? (
             <CenteredState
               icon={<Loader2 className="h-6 w-6 animate-spin text-[var(--color-primary)]" />}
               title="Reading the archive..."
               subtitle="Loading addons from your local catalog."
             />
-          ) : error ? (
-            <CenteredState title="Something went wrong." subtitle={error} tone="error" />
           ) : catalogEmpty ? (
             <CenteredState
               title="The catalog is empty."
@@ -307,7 +342,7 @@ export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => 
           ) : empty ? (
             <CenteredState
               title="No matches found."
-              subtitle="Try a different search term or clear the category filter."
+              subtitle="Try a different search term or change your filters."
             />
           ) : (
             <>
@@ -330,7 +365,7 @@ export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => 
               {canLoadMore ? (
                 <div className="mt-4 flex justify-center">
                   <button
-                    onClick={() => setPage((p) => p + 1)}
+                    onClick={() => setPagination({ searchParams, page: page + 1 })}
                     disabled={loadingMore}
                     className="inline-flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-low)] px-5 py-2.5 text-sm font-medium text-[var(--color-on-surface-variant)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] disabled:opacity-60"
                   >

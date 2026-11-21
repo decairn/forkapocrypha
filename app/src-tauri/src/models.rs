@@ -61,6 +61,13 @@ pub struct SearchResult {
     pub addons: Vec<Addon>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallationFilter {
+    pub installed: bool,
+    pub catalog_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddonDetails {
     #[serde(flatten)]

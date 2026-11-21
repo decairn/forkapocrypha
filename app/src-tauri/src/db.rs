@@ -3,7 +3,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use std::path::Path;
 
-use crate::models::{Addon, CatalogMeta, Category, SearchResult};
+use crate::models::{Addon, CatalogMeta, Category, InstallationFilter, SearchResult};
 
 pub fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
@@ -139,6 +139,7 @@ pub fn search(
     sort_by: Option<&str>,
     page: u32,
     limit: u32,
+    installation_filter: Option<&InstallationFilter>,
 ) -> Result<SearchResult> {
     let mut where_parts: Vec<String> = Vec::new();
     let mut params_vec: Vec<String> = Vec::new();
@@ -151,6 +152,12 @@ pub fn search(
         let idx = params_vec.len() + 1;
         where_parts.push(format!("category_id = ?{}", idx));
         params_vec.push(c.to_string());
+    }
+    if let Some(filter) = installation_filter {
+        let idx = params_vec.len() + 1;
+        let operator = if filter.installed { "IN" } else { "NOT IN" };
+        where_parts.push(format!("id {operator} (SELECT value FROM json_each(?{idx}))"));
+        params_vec.push(serde_json::to_string(&filter.catalog_ids)?);
     }
 
     let where_clause = if where_parts.is_empty() {
@@ -351,4 +358,57 @@ fn row_to_addon(row: &rusqlite::Row) -> rusqlite::Result<Addon> {
         thumbnail_url: row.get(11).ok(),
         images,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn installation_filter_applies_before_counting_and_paging() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        create_schema(&conn)?;
+        conn.execute_batch(
+            "INSERT INTO addons (id, category_id, name, directories) VALUES
+                ('a', 'maps', 'Map Alpha', 'Shared'),
+                ('b', 'maps', 'Map Beta', 'Shared'),
+                ('c', 'maps', 'Map Gamma', 'Gamma'),
+                ('d', 'tools', 'Map Delta', 'Delta'),
+                ('e', 'maps', 'Navigator', 'Navigator');",
+        )?;
+
+        let mut filter = InstallationFilter {
+            installed: true,
+            catalog_ids: ["b", "c", "d", "e"].map(String::from).to_vec(),
+        };
+        let run_search = |filter: Option<&InstallationFilter>, page| {
+            search(
+                &conn,
+                Some("Map"),
+                Some("maps"),
+                Some("name"),
+                page,
+                1,
+                filter,
+            )
+        };
+
+        let first = run_search(Some(&filter), 1)?;
+        let second = run_search(Some(&filter), 2)?;
+        assert_eq!(first.total, 2);
+        assert_eq!(first.addons[0].id, "b");
+        assert_eq!(second.addons[0].id, "c");
+
+        filter.installed = false;
+        let uninstalled = run_search(Some(&filter), 1)?;
+        assert_eq!(uninstalled.total, 1);
+        assert_eq!(uninstalled.addons[0].id, "a");
+        assert_eq!(run_search(None, 1)?.total, 3);
+
+        filter.catalog_ids.clear();
+        assert_eq!(run_search(Some(&filter), 1)?.total, 3);
+        filter.installed = true;
+        assert_eq!(run_search(Some(&filter), 1)?.total, 0);
+        Ok(())
+    }
 }
