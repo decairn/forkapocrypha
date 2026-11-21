@@ -150,7 +150,7 @@ fn extract_zip(bytes: &[u8], addons_dir: &Path) -> Result<Vec<String>> {
     let mut safe_entries: Vec<(usize, PathBuf)> = Vec::with_capacity(archive.len());
     for i in 0..archive.len() {
         let file = archive.by_index(i)?;
-        let raw_name = file.name().to_string();
+        let raw_name = file.name()?.into_owned();
 
         // enclosed_name() rejects paths with `..` or absolute prefixes — primary defense.
         let rel = match file.enclosed_name() {
@@ -391,4 +391,34 @@ fn merge_dir_into(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn extraction_replaces_old_files_and_rejects_traversal() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addons = temp.path().join("AddOns");
+        std::fs::create_dir_all(addons.join("Example"))?;
+        std::fs::write(addons.join("Example/old.txt"), "old")?;
+
+        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        archive.start_file("Example/Example.addon", options)?;
+        archive.write_all(b"new")?;
+        archive.start_file("../escape.txt", options)?;
+        archive.write_all(b"unsafe")?;
+        let bytes = archive.finish()?.into_inner();
+
+        assert_eq!(extract_zip(&bytes, &addons)?, vec!["Example"]);
+        assert!(!addons.join("Example/old.txt").exists());
+        assert_eq!(std::fs::read(addons.join("Example/Example.addon"))?, b"new");
+        assert!(!temp.path().join("escape.txt").exists());
+        Ok(())
+    }
 }

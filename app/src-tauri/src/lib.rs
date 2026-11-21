@@ -29,6 +29,16 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+fn can_auto_update() -> bool {
+    match process_watcher::is_eso_running() {
+        Ok(is_running) => !is_running,
+        Err(error) => {
+            eprintln!("failed to check ESO process status; skipping auto-update: {error}");
+            false
+        }
+    }
+}
+
 async fn auto_update_loop(handle: tauri::AppHandle) {
     loop {
         // Re-read the setting each iteration so changes propagate without a restart.
@@ -45,7 +55,7 @@ async fn auto_update_loop(handle: tauri::AppHandle) {
         tokio::time::sleep(Duration::from_secs(interval * 60)).await;
 
         // Don't touch addon files while the user is in-game.
-        if process_watcher::is_eso_running() {
+        if !can_auto_update() {
             continue;
         }
 
@@ -64,7 +74,7 @@ async fn auto_update_loop(handle: tauri::AppHandle) {
 
         for addon_id in to_update {
             // Re-check between each install — game could have started mid-batch.
-            if process_watcher::is_eso_running() {
+            if !can_auto_update() {
                 break;
             }
             let state = handle.state::<AppState>();
