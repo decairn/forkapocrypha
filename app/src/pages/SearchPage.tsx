@@ -142,6 +142,7 @@ export function SearchPage() {
             return next;
           });
           console.error("install failed:", e.payload.error);
+          refreshInstalledSet();
         }),
       );
       unlisteners.push(
