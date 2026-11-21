@@ -53,8 +53,8 @@ export function AutoUpdatePanel() {
     interval === null
       ? "Loading..."
       : interval === 0
-      ? "Auto-update is off. Apocrypha won't touch addons in the background."
-      : "Apocrypha checks for updates on this cadence and applies them while ESO is closed.";
+        ? "Auto-update is off. Apocrypha won't touch addons in the background."
+        : "Apocrypha checks for updates on this cadence and applies them while ESO is closed.";
 
   return (
     <div className="space-y-3">
@@ -89,9 +89,14 @@ export function AutoUpdatePanel() {
 
       {interval !== null && interval > 0 ? (
         <div className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-low)] px-3 py-2 text-xs text-[var(--color-on-surface-variant)]">
-          <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-outline)]" strokeWidth={1.75} />
+          <Clock
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-outline)]"
+            strokeWidth={1.75}
+          />
           <span>
-            Updates pause automatically while <span className="font-mono">eso64.exe</span> is running, so the game's file handles stay safe. Apocrypha must be at least minimised to the tray for this to work — quitting the app stops the loop.
+            Updates pause automatically while <span className="font-mono">eso64.exe</span> is
+            running, so the game's file handles stay safe. Apocrypha must be at least minimised to
+            the tray for this to work — quitting the app stops the loop.
           </span>
         </div>
       ) : null}

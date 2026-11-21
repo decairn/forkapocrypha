@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, lazyPlugins } from "vite-plus";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
@@ -15,7 +15,7 @@ const pkgVersion: string = JSON.parse(
 ).version;
 
 export default defineConfig(async () => ({
-  plugins: [react(), tailwindcss()],
+  plugins: lazyPlugins(() => [react(), tailwindcss()]),
 
   define: {
     __APP_VERSION__: JSON.stringify(pkgVersion),

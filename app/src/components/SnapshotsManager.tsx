@@ -1,12 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  AlertTriangle,
-  Camera,
-  Loader2,
-  RotateCcw,
-  Trash2,
-  Zap,
-} from "lucide-react";
+import { AlertTriangle, Camera, Loader2, RotateCcw, Trash2, Zap } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Snapshot } from "@/lib/types";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
@@ -151,8 +144,8 @@ export function SnapshotsManager() {
         </div>
       ) : snapshots && snapshots.length === 0 ? (
         <div className="rounded-md border border-dashed border-[var(--color-border)] px-4 py-6 text-center text-sm text-[var(--color-outline)]">
-          No snapshots yet — create one before touching an addon you can't
-          afford to lose configs for.
+          No snapshots yet — create one before touching an addon you can't afford to lose configs
+          for.
         </div>
       ) : (
         <ul className="divide-y divide-[var(--color-border)] overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-lowest)]">

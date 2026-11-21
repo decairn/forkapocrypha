@@ -49,9 +49,7 @@ function TimestampsLine({ addon }: { addon: InstalledAddon }) {
   const released = addon.catalog_last_updated
     ? formatRelativeTime(addon.catalog_last_updated)
     : null;
-  const installed = addon.installed_at
-    ? formatRelativeTime(addon.installed_at)
-    : null;
+  const installed = addon.installed_at ? formatRelativeTime(addon.installed_at) : null;
 
   if (!released && !installed) return null;
 
@@ -70,8 +68,8 @@ function StatusText({ addon }: { addon: InstalledAddon }) {
   if (addon.update_available) {
     return (
       <span className="inline-flex items-center gap-1.5 text-xs text-[var(--color-primary)]">
-        <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-primary)]" />
-        v{addon.catalog_version} available
+        <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-primary)]" />v
+        {addon.catalog_version} available
       </span>
     );
   }
@@ -94,13 +92,7 @@ function StatusText({ addon }: { addon: InstalledAddon }) {
 const ACTION_BASE =
   "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium w-[108px]";
 
-function UpdateButton({
-  updating,
-  onUpdate,
-}: {
-  updating: boolean;
-  onUpdate?: () => void;
-}) {
+function UpdateButton({ updating, onUpdate }: { updating: boolean; onUpdate?: () => void }) {
   if (updating) {
     return (
       <span
@@ -177,9 +169,7 @@ export function InstalledRow({
         }
       }}
       className={`group flex items-center gap-4 border-b border-[var(--color-border)] px-5 py-3 transition-colors last:border-b-0 ${
-        selected
-          ? "bg-[var(--color-surface-container)]"
-          : "hover:bg-[var(--color-surface-low)]"
+        selected ? "bg-[var(--color-surface-container)]" : "hover:bg-[var(--color-surface-low)]"
       } ${onSelect ? "cursor-pointer" : ""}`}
     >
       <InstalledThumb addon={addon} />

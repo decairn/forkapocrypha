@@ -9,11 +9,7 @@ interface CategorySelectProps {
   onChange: (id: string) => void;
 }
 
-export function CategorySelect({
-  categories,
-  value,
-  onChange,
-}: CategorySelectProps) {
+export function CategorySelect({ categories, value, onChange }: CategorySelectProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
@@ -52,9 +48,7 @@ export function CategorySelect({
             strokeWidth={1.75}
             style={{ color: selectedMeta?.color ?? "var(--color-on-surface-variant)" }}
           />
-          <span className="truncate">
-            {selected ? selected.title : "All categories"}
-          </span>
+          <span className="truncate">{selected ? selected.title : "All categories"}</span>
         </span>
         <ChevronDown
           className={`h-4 w-4 shrink-0 text-[var(--color-outline)] transition-transform ${
@@ -128,14 +122,9 @@ function Option({
     >
       <Icon className="h-4 w-4 shrink-0" strokeWidth={1.75} style={{ color }} />
       <span className="flex-1 truncate">{label}</span>
-      <span className="shrink-0 font-mono text-[11px] text-[var(--color-outline)]">
-        {count}
-      </span>
+      <span className="shrink-0 font-mono text-[11px] text-[var(--color-outline)]">{count}</span>
       {active ? (
-        <Check
-          className="h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]"
-          strokeWidth={2}
-        />
+        <Check className="h-3.5 w-3.5 shrink-0 text-[var(--color-primary)]" strokeWidth={2} />
       ) : null}
     </button>
   );

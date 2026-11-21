@@ -9,27 +9,14 @@ interface ToggleProps {
   pending?: boolean;
 }
 
-export function Toggle({
-  checked,
-  onChange,
-  label,
-  description,
-  disabled,
-  pending,
-}: ToggleProps) {
+export function Toggle({ checked, onChange, label, description, disabled, pending }: ToggleProps) {
   const isOff = !checked;
   return (
-    <label
-      className={`flex items-start justify-between gap-4 ${
-        disabled ? "opacity-60" : ""
-      }`}
-    >
+    <label className={`flex items-start justify-between gap-4 ${disabled ? "opacity-60" : ""}`}>
       <div className="min-w-0 flex-1">
         <div className="text-sm text-[var(--color-on-surface)]">{label}</div>
         {description ? (
-          <div className="mt-0.5 text-xs text-[var(--color-on-surface-variant)]">
-            {description}
-          </div>
+          <div className="mt-0.5 text-xs text-[var(--color-on-surface-variant)]">{description}</div>
         ) : null}
       </div>
       <button

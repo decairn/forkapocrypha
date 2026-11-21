@@ -100,12 +100,4 @@ export const api = {
   },
 };
 
-export type {
-  Addon,
-  AddonDetails,
-  Category,
-  InstalledAddon,
-  CatalogMeta,
-  SearchResult,
-  Snapshot,
-};
+export type { Addon, AddonDetails, Category, InstalledAddon, CatalogMeta, SearchResult, Snapshot };

@@ -171,13 +171,7 @@ function initials(name: string): string {
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
-function HeroImage({
-  addon,
-  onExpand,
-}: {
-  addon: Addon;
-  onExpand: () => void;
-}) {
+function HeroImage({ addon, onExpand }: { addon: Addon; onExpand: () => void }) {
   const [errored, setErrored] = useState(false);
   const src = addon.images[0] ?? addon.thumbnail_url ?? null;
   if (!src || errored) {
@@ -297,13 +291,7 @@ function ActionButton({
   }
 }
 
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="border-t border-[var(--color-border)] px-6 py-5">
       <h3 className="mb-3 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-outline)]">
@@ -480,20 +468,13 @@ export function AddonDetailPanel({
             <Stat label="Favorites" value={formatCount(addon.favorite_total)} icon={Heart} />
             <Stat
               label="Last Update"
-              value={
-                addon.last_updated
-                  ? formatRelativeTime(addon.last_updated)
-                  : "—"
-              }
+              value={addon.last_updated ? formatRelativeTime(addon.last_updated) : "—"}
             />
           </div>
 
           {galleryImages.length > 1 ? (
             <Section title={`Screenshots (${galleryImages.length})`}>
-              <ScreenshotStrip
-                images={galleryImages}
-                onOpen={(i) => setLightboxIndex(i)}
-              />
+              <ScreenshotStrip images={galleryImages} onOpen={(i) => setLightboxIndex(i)} />
             </Section>
           ) : null}
 
@@ -505,9 +486,7 @@ export function AddonDetailPanel({
             ) : description ? (
               <BBCodeContent text={description} />
             ) : (
-              <p className="text-sm italic text-[var(--color-outline)]">
-                No description provided.
-              </p>
+              <p className="text-sm italic text-[var(--color-outline)]">No description provided.</p>
             )}
           </Section>
 

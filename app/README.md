@@ -4,6 +4,7 @@ This is the Tauri 2 + Rust + React source tree for the Apocrypha addon
 manager. The user-facing documentation, downloads, install instructions
 and screenshots live in the repo root [README.md](../README.md). The
 architectural deep-dive lives in [CLAUDE.md](../CLAUDE.md).
+Vite+ provides the frontend dev and build toolchain.
 
 ## Quick dev
 

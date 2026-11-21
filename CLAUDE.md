@@ -25,6 +25,8 @@ cd src-tauri ; cargo check --message-format=short    # Rust-only check (faster t
 ```
 
 Vite dev server uses port 1420 (`vite.config.ts`).
+Vite+ (`vite-plus`) provides the `vp` commands behind the frontend `dev`,
+`build`, and `preview` scripts.
 
 ## Architecture
 

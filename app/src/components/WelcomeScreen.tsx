@@ -85,10 +85,7 @@ export function WelcomeScreen({ onDismiss }: WelcomeScreenProps) {
       <div className="flex flex-1 items-center justify-center px-8 py-10">
         <div className="w-full max-w-[440px]">
           <div className="flex flex-col items-center text-center">
-            <TentacleMark
-              className="h-12 w-12 text-[var(--color-primary)]"
-              title="Apocrypha"
-            />
+            <TentacleMark className="h-12 w-12 text-[var(--color-primary)]" title="Apocrypha" />
             <h1 className="mt-5 font-serif text-4xl font-light leading-none tracking-tight text-[var(--color-primary)]">
               APOCRYPHA
             </h1>
@@ -118,8 +115,8 @@ export function WelcomeScreen({ onDismiss }: WelcomeScreenProps) {
                       ? "Couldn't read this folder yet — you can fix the path below or continue and adjust later in Settings."
                       : "Scanning..."
                     : installedCount > 0
-                    ? `${installedCount.toLocaleString()} addon${installedCount === 1 ? "" : "s"} found, ready to manage.`
-                    : "Folder is empty — install some addons to get started."}
+                      ? `${installedCount.toLocaleString()} addon${installedCount === 1 ? "" : "s"} found, ready to manage.`
+                      : "Folder is empty — install some addons to get started."}
                 </p>
               </>
             )}
@@ -134,8 +131,8 @@ export function WelcomeScreen({ onDismiss }: WelcomeScreenProps) {
           </div>
 
           <p className="mt-5 text-xs text-[var(--color-outline)]">
-            The catalog is syncing in the background. You can start browsing
-            right away — it'll fill in as it lands.
+            The catalog is syncing in the background. You can start browsing right away — it'll fill
+            in as it lands.
           </p>
 
           <button

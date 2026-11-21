@@ -82,13 +82,10 @@ export function parseBBCode(raw: string): BlockNode[] {
   // 1. Extract [code]...[/code] FIRST — its body must keep raw markup, so
   // it gets pulled aside before any of the subsequent strips touch the text.
   const codeBlocks: string[] = [];
-  text = text.replace(
-    /\[code(?:=[^\]]*)?\]([\s\S]*?)\[\/code\]/gi,
-    (_, body: string) => {
-      const idx = codeBlocks.push(body) - 1;
-      return `\n\n${SENTINEL}CODE${idx}${SENTINEL}\n\n`;
-    },
-  );
+  text = text.replace(/\[code(?:=[^\]]*)?\]([\s\S]*?)\[\/code\]/gi, (_, body: string) => {
+    const idx = codeBlocks.push(body) - 1;
+    return `\n\n${SENTINEL}CODE${idx}${SENTINEL}\n\n`;
+  });
 
   // 2. Drop images / embedded media — the panel renders screenshots
   // separately and we can't play YouTube/video inline.
@@ -127,8 +124,7 @@ export function parseBBCode(raw: string): BlockNode[] {
   // half. Author of Writ Crafter literally writes "[U]Slash Commands\n[/U]".
   text = text.replace(
     /\[(b|i|u|s)\]([\s\S]*?)\[\/\1\]/gi,
-    (_, tag: string, body: string) =>
-      `[${tag}]${body.replace(/\s*\n\s*/g, " ").trim()}[/${tag}]`,
+    (_, tag: string, body: string) => `[${tag}]${body.replace(/\s*\n\s*/g, " ").trim()}[/${tag}]`,
   );
 
   // 5. Quote / spoiler: keep contents as a paragraph break.
@@ -138,13 +134,10 @@ export function parseBBCode(raw: string): BlockNode[] {
   // 6. Extract [list]...[/list]. Items captured here are already free of
   // [color]/[indent]/etc thanks to step 3.
   const listBlocks: string[][] = [];
-  text = text.replace(
-    /\[list(?:=[^\]]*)?\]([\s\S]*?)\[\/list\]/gi,
-    (_, body: string) => {
-      const idx = listBlocks.push(splitListItems(body)) - 1;
-      return `\n\n${SENTINEL}LIST${idx}${SENTINEL}\n\n`;
-    },
-  );
+  text = text.replace(/\[list(?:=[^\]]*)?\]([\s\S]*?)\[\/list\]/gi, (_, body: string) => {
+    const idx = listBlocks.push(splitListItems(body)) - 1;
+    return `\n\n${SENTINEL}LIST${idx}${SENTINEL}\n\n`;
+  });
 
   // 7. Strip stray [LIST] / [/LIST] (unbalanced markers some authors leave
   // dangling — e.g. LoreBooks closes one more [/LIST] than it opens).
@@ -153,10 +146,7 @@ export function parseBBCode(raw: string): BlockNode[] {
   // 8. Block-level breaks.
   text = text.replace(/\[hr\]/gi, `\n\n${SENTINEL}HR${SENTINEL}\n\n`);
   text = text.replace(/\[br\]/gi, "\n");
-  text = text.replace(
-    /^[ \t]*[-=_*]{3,}[ \t]*$/gm,
-    `\n\n${SENTINEL}HR${SENTINEL}\n\n`,
-  );
+  text = text.replace(/^[ \t]*[-=_*]{3,}[ \t]*$/gm, `\n\n${SENTINEL}HR${SENTINEL}\n\n`);
 
   // 9. Stray [*] outside [list] (some authors use bullets without wrapping).
   text = text.replace(/\[\*\]\s*/gi, "• ");
@@ -265,10 +255,7 @@ function classifyParagraph(
     }
 
     // Single-version changelog line: "version 3.2.1 - someone" or "v106".
-    if (
-      lines.length === 1 &&
-      /^v(?:ersion)?\s*[\w.\-]+(?:\s*[-–—]\s*.+)?$/i.test(firstLine)
-    ) {
+    if (lines.length === 1 && /^v(?:ersion)?\s*[\w.\-]+(?:\s*[-–—]\s*.+)?$/i.test(firstLine)) {
       out.push({
         type: "heading",
         level: 3,
@@ -278,10 +265,7 @@ function classifyParagraph(
     }
 
     // Bullet block: every line starts with •/-/*.
-    if (
-      lines.length > 1 &&
-      lines.every((l) => /^\s*[•\-*]\s+/.test(l) && l.trim().length > 1)
-    ) {
+    if (lines.length > 1 && lines.every((l) => /^\s*[•\-*]\s+/.test(l) && l.trim().length > 1)) {
       const items = lines
         .map((l) => l.replace(/^\s*[•\-*]\s+/, "").trim())
         .filter(Boolean)

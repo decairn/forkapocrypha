@@ -17,6 +17,7 @@ after editing `source.svg`:
 
    This writes all the variants back into `app/src-tauri/icons/` and
    overwrites the default Tauri wave icons that ship with the scaffold.
+
 3. Commit the regenerated icons (they're binary, but tracked normally).
 
 The SVG itself isn't read by Tauri — keep it here only as the design
