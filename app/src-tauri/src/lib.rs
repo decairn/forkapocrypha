@@ -39,6 +39,31 @@ fn can_auto_update() -> bool {
     }
 }
 
+async fn refresh_catalog_for_auto_update(handle: &tauri::AppHandle) -> bool {
+    let state = handle.state::<AppState>();
+    if state.is_syncing() {
+        eprintln!("catalog sync already in progress; skipping automatic update check");
+        return false;
+    }
+
+    let _ = handle.emit("catalog:sync:start", ());
+    match state.run_sync().await {
+        Ok(meta) => {
+            let _ = handle.emit("catalog:sync:done", &meta);
+            true
+        }
+        Err(error) => {
+            if error.to_string() == state::SYNC_IN_PROGRESS_ERROR {
+                eprintln!("catalog sync already in progress; skipping automatic update check");
+            } else {
+                eprintln!("automatic catalog refresh failed: {error:#}");
+                let _ = handle.emit("catalog:sync:error", error.to_string());
+            }
+            false
+        }
+    }
+}
+
 async fn auto_update_loop(handle: tauri::AppHandle) {
     loop {
         // Re-read the setting each iteration so changes propagate without a restart.
@@ -56,6 +81,12 @@ async fn auto_update_loop(handle: tauri::AppHandle) {
 
         // Don't touch addon files while the user is in-game.
         if !can_auto_update() {
+            continue;
+        }
+
+        // Refresh before reading update state. A failed or concurrent refresh
+        // must never cause us to update from the stale SQLite catalog.
+        if !refresh_catalog_for_auto_update(&handle).await {
             continue;
         }
 

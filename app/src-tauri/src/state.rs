@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 const CLOSE_TO_TRAY_KEY: &str = "close_to_tray";
 const AUTO_UPDATE_INTERVAL_KEY: &str = "auto_update_interval_minutes";
+pub const SYNC_IN_PROGRESS_ERROR: &str = "sync already in progress";
 
 use crate::api::MmouiClient;
 use crate::db;
@@ -83,9 +84,13 @@ impl AppState {
         self.auto_update_interval_minutes.load(Ordering::SeqCst)
     }
 
+    pub fn is_syncing(&self) -> bool {
+        self.syncing.load(Ordering::SeqCst)
+    }
+
     pub async fn run_sync(&self) -> Result<CatalogMeta> {
         if self.syncing.swap(true, Ordering::SeqCst) {
-            return Err(anyhow!("sync already in progress"));
+            return Err(anyhow!(SYNC_IN_PROGRESS_ERROR));
         }
         let _guard = SyncGuard(&self.syncing);
 
@@ -107,5 +112,24 @@ struct SyncGuard<'a>(&'a AtomicBool);
 impl<'a> Drop for SyncGuard<'a> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_guard_releases_concurrent_sync_block() {
+        let syncing = AtomicBool::new(false);
+        assert!(!syncing.swap(true, Ordering::SeqCst));
+        assert!(syncing.swap(true, Ordering::SeqCst));
+
+        {
+            let _guard = SyncGuard(&syncing);
+            assert!(syncing.load(Ordering::SeqCst));
+        }
+
+        assert!(!syncing.load(Ordering::SeqCst));
     }
 }
