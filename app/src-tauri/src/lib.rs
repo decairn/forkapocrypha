@@ -9,6 +9,7 @@ mod scanner;
 mod state;
 
 use state::AppState;
+use std::future::Future;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -50,20 +51,28 @@ async fn refresh_catalog_for_auto_update(handle: &tauri::AppHandle) -> bool {
     }
 }
 
+async fn wait_for_auto_update_tick<F: Future<Output = ()>>(
+    current_interval: impl Fn() -> u64,
+    sleep: impl FnOnce(Duration) -> F,
+) -> Option<u64> {
+    let interval = current_interval();
+    if interval == 0 {
+        sleep(POLL_WHEN_DISABLED).await;
+        return None;
+    }
+
+    sleep(Duration::from_secs(interval * 60)).await;
+    (current_interval() == interval).then_some(interval)
+}
+
 async fn auto_update_loop(handle: tauri::AppHandle) {
+    let state = handle.state::<AppState>();
     loop {
-        // Re-read the setting each iteration so changes propagate without a restart.
-        let interval = {
-            let state = handle.state::<AppState>();
-            state.auto_update_interval()
-        };
-
-        if interval == 0 {
-            tokio::time::sleep(POLL_WHEN_DISABLED).await;
+        let Some(interval) =
+            wait_for_auto_update_tick(|| state.auto_update_interval(), tokio::time::sleep).await
+        else {
             continue;
-        }
-
-        tokio::time::sleep(Duration::from_secs(interval * 60)).await;
+        };
 
         // Don't touch addon files while the user is in-game.
         if !can_auto_update() {
@@ -72,29 +81,27 @@ async fn auto_update_loop(handle: tauri::AppHandle) {
 
         // Refresh before reading update state. A failed or concurrent refresh
         // must never cause us to update from the stale SQLite catalog.
-        if !refresh_catalog_for_auto_update(&handle).await {
+        if !refresh_catalog_for_auto_update(&handle).await
+            || state.auto_update_interval() != interval
+        {
             continue;
         }
 
         // Pull the current list of installed-and-out-of-date addons.
-        let to_update: Vec<String> = {
-            let state = handle.state::<AppState>();
-            match commands::enumerate_installed(&state).await {
-                Ok(list) => list
-                    .into_iter()
-                    .filter(|a| a.update_available)
-                    .filter_map(|a| a.catalog_id)
-                    .collect(),
-                Err(_) => continue,
-            }
+        let to_update: Vec<String> = match commands::enumerate_installed(&state).await {
+            Ok(list) => list
+                .into_iter()
+                .filter(|a| a.update_available)
+                .filter_map(|a| a.catalog_id)
+                .collect(),
+            Err(_) => continue,
         };
 
         for addon_id in to_update {
-            // Re-check between each install — game could have started mid-batch.
-            if !can_auto_update() {
+            // The game or settings can change during the scan or a prior install.
+            if !can_auto_update() || state.auto_update_interval() != interval {
                 break;
             }
-            let state = handle.state::<AppState>();
             if let Err(error) =
                 installer::install_addon(state.inner(), &handle, addon_id.clone(), false).await
             {
@@ -222,4 +229,31 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{wait_for_auto_update_tick, Duration, POLL_WHEN_DISABLED};
+    use std::cell::Cell;
+
+    #[tokio::test]
+    async fn auto_update_tick_uses_the_setting_at_the_end_of_the_wait() {
+        for (before, after, wait, expected) in [
+            (60, 0, Duration::from_secs(3600), None),
+            (60, 120, Duration::from_secs(3600), None),
+            (60, 60, Duration::from_secs(3600), Some(60)),
+            (0, 60, POLL_WHEN_DISABLED, None),
+        ] {
+            let interval = &Cell::new(before);
+            let tick = wait_for_auto_update_tick(
+                || interval.get(),
+                |delay| async move {
+                    assert_eq!(delay, wait);
+                    interval.set(after);
+                },
+            )
+            .await;
+            assert_eq!(tick, expected, "interval changed from {before} to {after}");
+        }
+    }
 }
