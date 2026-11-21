@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{ipc::Channel, AppHandle, Emitter, State};
 
 use crate::db;
 use crate::installer;
@@ -303,9 +303,12 @@ pub async fn install_addon(
     app: AppHandle,
     state: State<'_, AppState>,
     addon_id: String,
+    conflict_review: Channel<installer::InstallConflictReview>,
 ) -> CmdResult<Vec<String>> {
     let _ = app.emit("addon:install:start", &serde_json::json!({ "id": &addon_id }));
-    match installer::install_addon(state.inner(), &app, addon_id.clone(), true).await {
+    match installer::install_addon(state.inner(), &app, addon_id.clone(), Some(&conflict_review))
+        .await
+    {
         Ok(dirs) => {
             let _ = app.emit(
                 "addon:install:done",
@@ -322,6 +325,15 @@ pub async fn install_addon(
             Err(msg)
         }
     }
+}
+
+#[tauri::command]
+pub fn resolve_install_conflict(
+    approval: State<'_, installer::InstallConflictApproval>,
+    id: String,
+    approved: bool,
+) -> CmdResult<()> {
+    approval.resolve(&id, approved).map_err(map_err)
 }
 
 #[tauri::command]

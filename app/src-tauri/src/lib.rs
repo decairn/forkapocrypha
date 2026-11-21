@@ -111,7 +111,7 @@ async fn auto_update_loop(handle: tauri::AppHandle) {
                 break;
             }
             if let Err(error) =
-                installer::install_addon(state.inner(), &handle, addon_id.clone(), false).await
+                installer::install_addon(state.inner(), &handle, addon_id.clone(), None).await
             {
                 eprintln!("auto-update failed for {addon_title} (addon {addon_id}): {error:#}");
                 let _ = handle.emit(
@@ -149,6 +149,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(app_state)
+        .manage(installer::InstallConflictApproval::default())
         .setup(move |app| {
             // Tray icon with a minimal Show / Quit menu.
             let show_item =
@@ -225,6 +226,7 @@ pub fn run() {
             commands::get_addons_dir,
             commands::set_addons_dir,
             commands::install_addon,
+            commands::resolve_install_conflict,
             commands::preview_uninstall_addon,
             commands::uninstall_addon,
             commands::uninstall_legacy_addon,
