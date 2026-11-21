@@ -10,7 +10,8 @@ use crate::state::AppState;
 
 /// Scan the AddOns folder and cross-reference catalog data. Public so the
 /// background auto-update task can reuse the same logic as the Tauri command.
-pub fn enumerate_installed(state: &AppState) -> anyhow::Result<Vec<InstalledAddon>> {
+pub async fn enumerate_installed(state: &AppState) -> anyhow::Result<Vec<InstalledAddon>> {
+    let _mutation_guard = state.addon_fs_mutations.lock().await;
     let dir = state.addons_dir.lock().unwrap().clone();
     let mut installed = scanner::scan(&dir)?;
 
@@ -191,7 +192,8 @@ pub fn get_addons_dir(state: State<'_, AppState>) -> CmdResult<String> {
 }
 
 #[tauri::command]
-pub fn set_addons_dir(state: State<'_, AppState>, path: String) -> CmdResult<()> {
+pub async fn set_addons_dir(state: State<'_, AppState>, path: String) -> CmdResult<()> {
+    let _mutation_guard = state.addon_fs_mutations.lock().await;
     let p = std::path::PathBuf::from(&path);
     *state.addons_dir.lock().unwrap() = p;
     state.persist_addons_dir(&path).map_err(map_err)?;
@@ -260,8 +262,8 @@ pub fn catalog_meta(state: State<'_, AppState>) -> CmdResult<CatalogMeta> {
 }
 
 #[tauri::command]
-pub fn list_installed(state: State<'_, AppState>) -> CmdResult<Vec<InstalledAddon>> {
-    enumerate_installed(state.inner()).map_err(map_err)
+pub async fn list_installed(state: State<'_, AppState>) -> CmdResult<Vec<InstalledAddon>> {
+    enumerate_installed(state.inner()).await.map_err(map_err)
 }
 
 #[tauri::command]
@@ -368,31 +370,13 @@ pub fn delete_savedvars_snapshot(state: State<'_, AppState>, id: String) -> CmdR
 }
 
 #[tauri::command]
-pub fn uninstall_addon(
+pub async fn uninstall_addon(
     app: AppHandle,
     state: State<'_, AppState>,
     dir_name: String,
 ) -> CmdResult<()> {
-    // Resolve catalog id: prefer the pinned mapping written at install time,
-    // fall back to the directory→catalog lookup for legacy / manual installs.
-    let catalog_id = {
-        let conn = state.db.lock().unwrap();
-        let pinned = db::get_metadata(&conn, &format!("installed_dir:{}", dir_name))
-            .filter(|s| !s.is_empty());
-        pinned.or_else(|| {
-            db::find_by_directory(&conn, &dir_name)
-                .ok()
-                .flatten()
-                .map(|a| a.id)
-        })
-    };
-
-    let addons_dir = state.addons_dir.lock().unwrap().clone();
-    match installer::uninstall(&addons_dir, &dir_name) {
+    match installer::uninstall_addon(state.inner(), &dir_name).await {
         Ok(_) => {
-            if let Some(id) = &catalog_id {
-                installer::clear_install_marker(state.inner(), id, &dir_name);
-            }
             let _ = app.emit(
                 "addon:uninstall:done",
                 &serde_json::json!({ "dir_name": &dir_name }),

@@ -79,7 +79,7 @@ async fn auto_update_loop(handle: tauri::AppHandle) {
         // Pull the current list of installed-and-out-of-date addons.
         let to_update: Vec<String> = {
             let state = handle.state::<AppState>();
-            match commands::enumerate_installed(&state) {
+            match commands::enumerate_installed(&state).await {
                 Ok(list) => list
                     .into_iter()
                     .filter(|a| a.update_available)
@@ -166,18 +166,14 @@ pub fn run() {
                 show_main_window(&app.handle().clone());
             }
 
-            // One-shot migration: v0.1.8 / v0.1.9 dropped translation
-            // overrides (`gamedata/`, `EsoUI/`) into `live/` instead of
-            // `live/AddOns/`. Move any leftovers back where they belong.
-            {
-                let state = app.state::<AppState>();
-                installer::migrate_live_orphans(state.inner());
-            }
-
             // Catalog auto-sync on every boot.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = handle.state::<AppState>();
+                // One-shot migration: v0.1.8 / v0.1.9 dropped translation
+                // overrides (`gamedata/`, `EsoUI/`) into `live/` instead of
+                // `live/AddOns/`. Move any leftovers back where they belong.
+                installer::migrate_live_orphans(state.inner()).await;
                 if let Err(error) = state.run_sync(&handle).await {
                     eprintln!("startup catalog refresh failed: {error:#}");
                 }
