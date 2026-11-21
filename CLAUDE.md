@@ -35,11 +35,11 @@ Two halves communicating via Tauri IPC commands and broadcast events.
 ### Rust backend (`app/src-tauri/src/`)
 
 - **`lib.rs`** — Tauri builder, command registration, `setup()` hook that auto-syncs the catalog on every boot.
-- **`state.rs`** — `AppState` (single instance via `.manage()`): SQLite connection, MMOUI HTTP client, addons folder path, `AtomicBool` sync guard. `AppState::run_sync()` is the canonical sync entry point; reused by both auto-sync and the manual `sync_catalog` command.
+- **`state.rs`** — `AppState` (single instance via `.manage()`): SQLite connection, MMOUI HTTP client, addons folder path, an async filesystem mutation lock, and `AtomicBool` sync guard. `AppState::run_sync()` owns the sync lifecycle events and is reused by auto-sync and the manual `sync_catalog` command.
 - **`api.rs`** — MMOUI v3 client. Discovers feed URLs via `globalconfig.json`, fetches `filelist.json` (~6000 addons, 5–10 MB) and `categorylist.json`. Lazy `fetch_addon_download_url` and `download_bytes` for install-time use.
 - **`db.rs`** — SQLite catalog at `%APPDATA%/Apocrypha/catalog.db`. WAL mode. Idempotent `ALTER TABLE` migrations on `addons` for new columns (currently `thumbnail_url`, `images`). `find_by_directory` is the bridge from local installed dirs back to catalog entries.
 - **`scanner.rs`** — Walks `<Documents>/Elder Scrolls Online/live/AddOns/`, parses `.txt` / `.addon` manifests (`## Title`, `## Version`, `## DependsOn`, etc.). Strips ESO color codes (`|cRRGGBB...|r`) and handles lossy UTF-8.
-- **`installer.rs`** — Install/uninstall pipeline. Archives are staged and files are tracked per addon in `.apocrypha-ownership.json` with filesystem identities and SHA-256 hashes. Only unchanged files owned by that addon can be replaced or removed, including obsolete manifests; unknown, modified, and other-addon conflicts abort. Rollback failures leave a recovery directory inside AddOns. Uninstall uses `canonicalize()` to confirm target lives inside `addons_dir` before `remove_dir_all`. Dependencies resolve recursively via `find_by_directory` with a visited `HashSet`.
+- **`installer.rs`** — Install/uninstall pipeline. The filesystem mutation lock covers the full install/dependency tree, including ownership operations. Archives are staged and files are tracked per addon in `.apocrypha-ownership.json` with filesystem identities and SHA-256 hashes. Only unchanged files owned by that addon can be replaced or removed, including obsolete manifests; unknown, modified, and other-addon conflicts abort. Rollback failures leave a recovery directory inside AddOns. Uninstall uses `canonicalize()` to confirm target lives inside `addons_dir` before `remove_dir_all`. Dependencies resolve recursively via `find_by_directory` with a visited `HashSet`.
 - **`commands.rs`** — Tauri command wrappers. Async commands emit events for the frontend: `catalog:sync:{start,done,error}`, `addon:install:{start,progress,done,error}`, `addon:uninstall:{done,error}`. Also hosts `enumerate_installed`, which resolves each on-disk addon to a catalog row (see below).
 - **`models.rs`** — Shared serde types (`Addon`, `Category`, `InstalledAddon`, `CatalogMeta`, `SearchResult`). Keep mirrored in `src/lib/types.ts`.
 
@@ -75,7 +75,7 @@ Either signal diverging means an update is needed. Mirrors Minion's behavior.
 
 ## Catalog data flow
 
-1. App launches → `setup()` hook spawns async task → emits `catalog:sync:start`.
+1. App launches → `setup()` hook spawns async task → `run_sync()` emits `catalog:sync:start`.
 2. `MmouiClient` fetches `filelist.json` + `categorylist.json` (whole catalog at once — the API does **not** support pagination or server-side search).
 3. Bulk upsert into SQLite via transactions.
 4. Emits `catalog:sync:done` with `CatalogMeta`.

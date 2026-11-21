@@ -39,6 +39,17 @@ fn can_auto_update() -> bool {
     }
 }
 
+async fn refresh_catalog_for_auto_update(handle: &tauri::AppHandle) -> bool {
+    let state = handle.state::<AppState>();
+    match state.run_sync(handle).await {
+        Ok(_) => true,
+        Err(error) => {
+            eprintln!("automatic catalog refresh failed; skipping update check: {error:#}");
+            false
+        }
+    }
+}
+
 async fn auto_update_loop(handle: tauri::AppHandle) {
     loop {
         // Re-read the setting each iteration so changes propagate without a restart.
@@ -59,10 +70,16 @@ async fn auto_update_loop(handle: tauri::AppHandle) {
             continue;
         }
 
+        // Refresh before reading update state. A failed or concurrent refresh
+        // must never cause us to update from the stale SQLite catalog.
+        if !refresh_catalog_for_auto_update(&handle).await {
+            continue;
+        }
+
         // Pull the current list of installed-and-out-of-date addons.
         let to_update: Vec<String> = {
             let state = handle.state::<AppState>();
-            match commands::enumerate_installed(&state) {
+            match commands::enumerate_installed(&state).await {
                 Ok(list) => list
                     .into_iter()
                     .filter(|a| a.update_available)
@@ -149,26 +166,16 @@ pub fn run() {
                 show_main_window(&app.handle().clone());
             }
 
-            // One-shot migration: v0.1.8 / v0.1.9 dropped translation
-            // overrides (`gamedata/`, `EsoUI/`) into `live/` instead of
-            // `live/AddOns/`. Move any leftovers back where they belong.
-            {
-                let state = app.state::<AppState>();
-                installer::migrate_live_orphans(state.inner());
-            }
-
             // Catalog auto-sync on every boot.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = handle.state::<AppState>();
-                let _ = handle.emit("catalog:sync:start", ());
-                match state.run_sync().await {
-                    Ok(meta) => {
-                        let _ = handle.emit("catalog:sync:done", &meta);
-                    }
-                    Err(e) => {
-                        let _ = handle.emit("catalog:sync:error", e.to_string());
-                    }
+                // One-shot migration: v0.1.8 / v0.1.9 dropped translation
+                // overrides (`gamedata/`, `EsoUI/`) into `live/` instead of
+                // `live/AddOns/`. Move any leftovers back where they belong.
+                installer::migrate_live_orphans(state.inner()).await;
+                if let Err(error) = state.run_sync(&handle).await {
+                    eprintln!("startup catalog refresh failed: {error:#}");
                 }
             });
 
