@@ -3,7 +3,9 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::db;
 use crate::installer;
-use crate::models::{Addon, AddonDetails, CatalogMeta, InstalledAddon, SearchResult, Snapshot};
+use crate::models::{
+    Addon, AddonDetails, CatalogMeta, InstallationFilter, InstalledAddon, SearchResult, Snapshot,
+};
 use crate::savedvars;
 use crate::scanner;
 use crate::state::AppState;
@@ -208,6 +210,7 @@ pub fn search_addons(
     sort_by: Option<String>,
     page: Option<u32>,
     limit: Option<u32>,
+    installation_filter: Option<InstallationFilter>,
 ) -> CmdResult<SearchResult> {
     let conn = state.db.lock().unwrap();
     db::search(
@@ -217,6 +220,7 @@ pub fn search_addons(
         sort_by.as_deref(),
         page.unwrap_or(1),
         limit.unwrap_or(30),
+        installation_filter.as_ref(),
     )
     .map_err(map_err)
 }

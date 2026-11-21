@@ -19,6 +19,7 @@ export const api = {
     sortBy?: SortKey;
     page?: number;
     limit?: number;
+    installationFilter?: { installed: boolean; catalogIds: string[] };
   }): Promise<SearchResult> {
     return invoke<SearchResult>("search_addons", {
       query: params.query ?? null,
@@ -26,6 +27,7 @@ export const api = {
       sortBy: params.sortBy ?? null,
       page: params.page ?? 1,
       limit: params.limit ?? 30,
+      installationFilter: params.installationFilter ?? null,
     });
   },
 
