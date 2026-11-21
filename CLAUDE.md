@@ -35,11 +35,11 @@ Two halves communicating via Tauri IPC commands and broadcast events.
 ### Rust backend (`app/src-tauri/src/`)
 
 - **`lib.rs`** — Tauri builder, command registration, `setup()` hook that auto-syncs the catalog on every boot.
-- **`state.rs`** — `AppState` (single instance via `.manage()`): SQLite connection, MMOUI HTTP client, addons folder path, `AtomicBool` sync guard. `AppState::run_sync()` is the canonical sync entry point; reused by both auto-sync and the manual `sync_catalog` command.
+- **`state.rs`** — `AppState` (single instance via `.manage()`): SQLite connection, MMOUI HTTP client, addons folder path, an async filesystem mutation lock, and `AtomicBool` sync guard. `AppState::run_sync()` owns the sync lifecycle events and is reused by auto-sync and the manual `sync_catalog` command.
 - **`api.rs`** — MMOUI v3 client. Discovers feed URLs via `globalconfig.json`, fetches `filelist.json` (~6000 addons, 5–10 MB) and `categorylist.json`. Lazy `fetch_addon_download_url` and `download_bytes` for install-time use.
 - **`db.rs`** — SQLite catalog at `%APPDATA%/Apocrypha/catalog.db`. WAL mode. Idempotent `ALTER TABLE` migrations on `addons` for new columns (currently `thumbnail_url`, `images`). `find_by_directory` is the bridge from local installed dirs back to catalog entries.
 - **`scanner.rs`** — Walks `<Documents>/Elder Scrolls Online/live/AddOns/`, parses `.txt` / `.addon` manifests (`## Title`, `## Version`, `## DependsOn`, etc.). Strips ESO color codes (`|cRRGGBB...|r`) and handles lossy UTF-8.
-- **`installer.rs`** — Install/uninstall pipeline. **Two-pass extraction**: pass 1 validates entries and gathers root dirs; **pre-clean deletes each existing target dir before extracting** (this is what made `LibAddonMenu-2.0` actually update — old `Foo.txt` no longer lingers when the new release ships `Foo.addon`); pass 2 extracts. Path-traversal defense in depth: `enclosed_name()` + explicit `Component::ParentDir/Prefix/RootDir` rejection. Uninstall uses `canonicalize()` to confirm target lives inside `addons_dir` before `remove_dir_all`. Dependencies resolve recursively via `find_by_directory` with a visited `HashSet`.
+- **`installer.rs`** — Install/uninstall pipeline. The filesystem mutation lock covers the full install/dependency tree, including ownership operations. Archives are staged and files tracked per addon in `.apocrypha-ownership.json` with filesystem identities and SHA-256 hashes. Known other-addon conflicts abort; manual installs can replace untracked or modified files only after explicit confirmation and a persistent conflict backup, while auto-updates abort. Uninstall removes only verified unchanged files for the owner and preserves other files. Rollback failures leave a recovery directory inside AddOns. Dependencies resolve recursively via `find_by_directory` with a visited `HashSet`.
 - **`commands.rs`** — Tauri command wrappers. Async commands emit events for the frontend: `catalog:sync:{start,done,error}`, `addon:install:{start,progress,done,error}`, `addon:uninstall:{done,error}`. Also hosts `enumerate_installed`, which resolves each on-disk addon to a catalog row (see below).
 - **`models.rs`** — Shared serde types (`Addon`, `Category`, `InstalledAddon`, `CatalogMeta`, `SearchResult`). Keep mirrored in `src/lib/types.ts`.
 
@@ -75,7 +75,7 @@ Either signal diverging means an update is needed. Mirrors Minion's behavior.
 
 ## Catalog data flow
 
-1. App launches → `setup()` hook spawns async task → emits `catalog:sync:start`.
+1. App launches → `setup()` hook spawns async task → `run_sync()` emits `catalog:sync:start`.
 2. `MmouiClient` fetches `filelist.json` + `categorylist.json` (whole catalog at once — the API does **not** support pagination or server-side search).
 3. Bulk upsert into SQLite via transactions.
 4. Emits `catalog:sync:done` with `CatalogMeta`.
@@ -103,7 +103,7 @@ Design rule: Newsreader is reserved for the "APOCRYPHA" wordmark in the sidebar.
 - **PATH refresh**: After `winget install`-ing new tools, the current shell session has a stale PATH. Refresh inline: `$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')`. Most PowerShell commands in this workspace prefix this.
 - **MMOUI API has no pagination and no server-side search**. The full catalog (5–10 MB JSON) is downloaded every sync. This is why the local SQLite mirror exists — other addon managers built on the same API take the same approach.
 - **Manifest version vs catalog version differ regularly**. The author's `## Version:` inside `Foo.txt`/`Foo.addon` is independent of MMOUI's `UIVersion`. Update detection compares the local manifest string against `UIVersion` after normalising leading `v`/`V`.
-- **Install/Update pre-cleans the target dir**. Without this, addons that change manifest extension between releases (e.g. `.txt` → `.addon`) leave orphan files that confuse the scanner. SavedVariables live in `live/SavedVariables/`, NOT in the AddOns subdirectory, so the wipe is safe.
+- **Legacy installs have unknown file ownership.** Manual updates prompt with a conflict list and retain backups before adopting affected files; never infer ownership from a shared root. Legacy uninstall requires explicit selection and backs up only selected untracked files; tracked, unselected, and outside-root files remain. A leftover `.apocrypha-install-*` directory blocks further mutations until its backups are recovered and the directory moved outside AddOns.
 - **Bundle size**: production build is ~265 KB JS, ~20 KB CSS, ~10 MB Rust binary. Stay frugal with new lucide icons (~1 KB each, but they add up if imported broadly).
 
 ## Commits

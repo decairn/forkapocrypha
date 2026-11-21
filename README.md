@@ -49,13 +49,57 @@ After the first install, Apocrypha can update itself: open **Settings → App Up
 - **Browse the full ESOUI catalog** (~6,000 addons) with live search, sort, category filter, and pagination
 - **One-click install** with **recursive dependency resolution** — LibStub, LibAddonMenu-2.0, LibCustomMenu, LibAsync and friends are pulled in automatically without asking
 - Required dependency minimums are checked against the installed manifest's `AddOnVersion`. If a dependency is too old or its version cannot be verified, installation reports an error and may be partial; update the dependency and retry.
-- **Update, uninstall, and bulk Update All** — re-uses the same install pipeline, with a pre-clean step that handles manifest renames (`.txt` → `.addon`) cleanly
+- **Update, uninstall, and bulk Update All** — re-uses the same staged install pipeline, including manifest renames (`.txt` → `.addon`)
 - **Background auto-update** of addons while ESO is closed (off by default; toggle in Settings)
 - **SavedVariables snapshots** — back up your configs before a risky update, restore in one click
 - **System tray + autostart** — close to tray, launch with Windows, catalog stays warm
 - **Detail panel** with description, changelog, screenshot gallery, and a fullscreen lightbox
 - **Self-updating app** via the built-in Tauri Updater
 - **OneDrive-aware** — automatically finds your AddOns folder even when Documents is redirected
+
+### Install conflicts and migration
+
+Apocrypha records each installed file's owner, filesystem identity, and content
+hash in `AddOns/.apocrypha-ownership.json`. Files owned by another addon are
+never overwritten. Manual updates that encounter untracked or modified files
+show a confirmation with the affected paths and a backup location. Review the
+complete `conflicts.txt` at that location before accepting: untracked files can
+belong to another addon, and accepting may affect it. Cancelling leaves the
+files untouched. Background updates never approve conflicts; update manually
+to review them.
+
+Existing manual installs and installs from older versions have no ownership
+record. Confirming a manual update backs up and adopts only conflicting files
+that the new archive replaces, plus an obsolete conflicting manifest if needed;
+other untracked files remain untouched. Backups are retained under Apocrypha's
+`backups/addon-file-conflicts` directory and are not SavedVariables snapshots.
+To recover originals, close ESO and Apocrypha, back up current files, and copy
+the desired originals from the backup's `files` directory to the corresponding
+AddOns paths. If restoring a manifest, remove the newer alternate extension so
+the game cannot load both. This is a backup of conflicting files, not a full
+addon rollback; restored files require conflict resolution on the next update.
+Copying or recreating tracked files also requires conflict resolution.
+
+Uninstall removes only unchanged files recorded as belonging to the selected
+addon, including its owned files in shared roots; other files are preserved.
+For a legacy addon without a tracked manifest, uninstall shows an unselected
+per-file list for that folder. Select only files you know you want removed;
+they may belong to another addon. Tracked files, links, unselected files, and
+files outside that folder are preserved, and all existing manifests must be
+selected to disable the addon. A backup of selected files is kept in
+`backups/addon-file-conflicts` with a `conflicts.txt` restoration guide; the
+exact path is shown after removal. Close ESO and Apocrypha before copying
+originals from its `files` directory back to the listed AddOns paths. Remaining
+files may leave the folder visible in Apocrypha. Modified tracked files block
+the normal uninstall until resolved.
+
+If an interrupted install or failed rollback leaves a hidden
+`.apocrypha-install-*` directory, recover its `backup` files first, then move
+that directory outside AddOns before retrying. Its `journal.json` lists affected
+paths, whether a new file was planned, and whether an old file existed; use it
+to review newly created files as well as restoring backups. Dependency errors can still
+leave earlier addon installations in place. Do not modify addons with another
+program while an install is running.
 
 ---
 
@@ -67,7 +111,7 @@ A few things Apocrypha tries to do well:
 
 - **Native and small** — a Rust + Tauri binary around ~10 MB, cold start in well under a second.
 - **Background-friendly** — lives in the system tray, can auto-update addons while ESO is closed, skips work while the game is running.
-- **Safer updates** — SavedVariables snapshots before risky updates, pre-clean step that handles manifest rename quirks.
+- **Safer updates** — SavedVariables snapshots before risky updates; archive staging and rollback protect existing files, including files in shared directories.
 - **Open source** — the source is right here, no telemetry, no accounts.
 
 ---

@@ -12,7 +12,7 @@ import type { Addon, Category, SortKey } from "@/lib/types";
 
 const PAGE_SIZE = 30;
 
-export function SearchPage() {
+export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => Promise<boolean> }) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [activeCategory, setActiveCategory] = useState<string>("");
   const [sortBy, setSortBy] = useState<SortKey>("download_total");
@@ -198,12 +198,18 @@ export function SearchPage() {
         return next;
       });
       try {
-        await api.uninstallAddon(dir);
+        await onUninstall(dir);
       } catch (e) {
         console.error("uninstall error:", e);
+      } finally {
+        setUninstallingDirs((prev) => {
+          const next = new Set(prev);
+          next.delete(dir);
+          return next;
+        });
       }
     },
-    [installedByCatalogId],
+    [installedByCatalogId, onUninstall],
   );
 
   const isAddonUninstalling = useCallback(

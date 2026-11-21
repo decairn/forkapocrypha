@@ -77,10 +77,10 @@ pub fn scan(addons_dir: &Path) -> Result<Vec<InstalledAddon>> {
 
 pub(crate) fn locate_manifest(dir: &Path, name: &str) -> Option<PathBuf> {
     let txt = dir.join(format!("{}.txt", name));
+    let addon = dir.join(format!("{}.addon", name));
     if txt.exists() {
         return Some(txt);
     }
-    let addon = dir.join(format!("{}.addon", name));
     if addon.exists() {
         return Some(addon);
     }

@@ -71,3 +71,17 @@ export interface Snapshot {
   total_size_bytes: number;
   trigger: string | null;
 }
+
+export interface LegacyUninstallFile {
+  path: string;
+  fingerprint: string;
+  manifest: boolean;
+}
+
+export interface UninstallPreview {
+  legacy: boolean;
+  addons_dir: string;
+  files: LegacyUninstallFile[];
+  protected_count: number;
+  backup_dir: string;
+}
