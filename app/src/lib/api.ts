@@ -1,9 +1,10 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   Addon,
   AddonDetails,
   CatalogMeta,
   Category,
+  InstallConflictReview,
   InstalledAddon,
   LegacyUninstallFile,
   SearchResult,
@@ -55,8 +56,13 @@ export const api = {
     return invoke<void>("set_addons_dir", { path });
   },
 
-  installAddon(addonId: string): Promise<string[]> {
-    return invoke<string[]>("install_addon", { addonId });
+  installAddon(addonId: string, onConflict: (review: InstallConflictReview) => void): Promise<string[]> {
+    const conflictReview = new Channel<InstallConflictReview>(onConflict);
+    return invoke<string[]>("install_addon", { addonId, conflictReview });
+  },
+
+  resolveInstallConflict(id: string, approved: boolean): Promise<void> {
+    return invoke<void>("resolve_install_conflict", { id, approved });
   },
 
   uninstallAddon(dirName: string): Promise<void> {
