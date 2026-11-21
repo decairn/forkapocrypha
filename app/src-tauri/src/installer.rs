@@ -1188,6 +1188,7 @@ fn validate_dependency_version(addons_dir: &Path, dep: &Dependency) -> Result<()
 pub struct UninstallOutcome {
     pub preserved_files: bool,
     pub backup_path: Option<PathBuf>,
+    pub directory_cleanup_warning: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -1433,7 +1434,7 @@ pub async fn uninstall_legacy(
         ));
     }
     let backup_path = backup.keep();
-    let result = (|| -> Result<()> {
+    let cleanup = (|| -> Result<Option<String>> {
         let work = tempfile::Builder::new()
             .prefix(".apocrypha-install-")
             .tempdir_in(&addons_dir)?;
@@ -1442,23 +1443,24 @@ pub async fn uninstall_legacy(
         std::fs::create_dir(&staged)?;
         std::fs::create_dir(&rollback)?;
         commit_file_changes(work, &addons_dir, &staged, &rollback, &changes)?;
-        cleanup_empty_dirs(&addons_dir, dirs)?;
+        let warning = cleanup_empty_dirs(&addons_dir, dirs);
         if selected_manifest {
             let conn = state.db.lock().unwrap();
             db::set_metadata(&conn, &format!("installed_dir:{dir_name}"), "")
                 .context("files were removed but directory marker cleanup failed")?;
         }
-        Ok(())
+        Ok(warning)
     })();
-    result.with_context(|| {
+    let directory_cleanup_warning = cleanup.with_context(|| {
         format!(
             "original selected files are backed up at {}",
             backup_path.display()
         )
     })?;
     Ok(UninstallOutcome {
-        preserved_files: target.exists(),
+        preserved_files: scanner::has_remaining_entries(&target),
         backup_path: Some(backup_path),
+        directory_cleanup_warning,
     })
 }
 
@@ -1535,13 +1537,14 @@ fn uninstall(
         expected_hash: registry_hash,
     });
     commit_file_changes(work, addons_dir, &staged, &backup, &changes)?;
-    cleanup_empty_dirs(addons_dir, dirs)?;
+    let directory_cleanup_warning = cleanup_empty_dirs(addons_dir, dirs);
     Ok((
         owner,
         roots,
         UninstallOutcome {
-            preserved_files: target.exists(),
+            preserved_files: scanner::has_remaining_entries(&target),
             backup_path: None,
+            directory_cleanup_warning,
         },
     ))
 }
@@ -1557,12 +1560,19 @@ fn add_parent_dirs(rel: &Path, dirs: &mut HashSet<PathBuf>) {
     }
 }
 
-fn cleanup_empty_dirs(addons_dir: &Path, dirs: HashSet<PathBuf>) -> Result<()> {
+// File removal has already committed. A locked directory should not prevent
+// finishing the uninstall or clearing its install markers.
+fn cleanup_empty_dirs(addons_dir: &Path, dirs: HashSet<PathBuf>) -> Option<String> {
+    let mut warning = None;
     let mut dirs: Vec<_> = dirs.into_iter().collect();
     dirs.sort_by_key(|dir| std::cmp::Reverse(dir.components().count()));
     for dir in dirs {
         let path = addons_dir.join(dir);
-        match std::fs::remove_dir(&path) {
+        #[cfg(windows)]
+        let result = remove_empty_dir_windows(&path);
+        #[cfg(not(windows))]
+        let result = std::fs::remove_dir(&path);
+        match result {
             Ok(()) => {}
             Err(error)
                 if matches!(
@@ -1570,12 +1580,55 @@ fn cleanup_empty_dirs(addons_dir: &Path, dirs: HashSet<PathBuf>) -> Result<()> {
                     std::io::ErrorKind::DirectoryNotEmpty | std::io::ErrorKind::NotFound
                 ) => {}
             Err(error) => {
-                return Err(anyhow!(
-                    "addon files were removed, but empty directory cleanup failed at {}: {error}",
-                    path.display()
-                ))
+                warning.get_or_insert_with(|| format!("{}: {error}", path.display()));
             }
         }
+    }
+    warning
+}
+
+#[cfg(windows)]
+fn remove_empty_dir_windows(path: &Path) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfoEx, SetFileInformationByHandle, DELETE, FILE_DISPOSITION_FLAG_DELETE,
+        FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE, FILE_DISPOSITION_INFO_EX,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+    };
+
+    let denied = match std::fs::remove_dir(path) {
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => error,
+        result => return result,
+    };
+    let attributes = std::fs::symlink_metadata(path)?;
+    if !attributes.is_dir() || !attributes.permissions().readonly() {
+        return Err(denied);
+    }
+
+    // Delete by handle so Windows checks that the folder is empty and we
+    // never need to change its attributes or follow a replacement link.
+    let dir = std::fs::OpenOptions::new()
+        .access_mode(DELETE | FILE_READ_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    if !dir.metadata()?.is_dir() {
+        return Err(denied);
+    }
+    let disposition = FILE_DISPOSITION_INFO_EX {
+        Flags: FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE,
+    };
+    // The open handle and the correctly sized disposition are valid for this call.
+    if unsafe {
+        SetFileInformationByHandle(
+            dir.as_raw_handle(),
+            FileDispositionInfoEx,
+            (&disposition as *const FILE_DISPOSITION_INFO_EX).cast(),
+            std::mem::size_of::<FILE_DISPOSITION_INFO_EX>() as u32,
+        )
+    } == 0
+    {
+        return Err(Error::last_os_error());
     }
     Ok(())
 }
@@ -2481,6 +2534,97 @@ mod tests {
             b"manifest"
         );
         assert_eq!(std::fs::read(addons.join("Example/modified"))?, b"edited");
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn uninstall_removes_read_only_empty_directories() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let state = legacy_state(&temp)?;
+        let addons = state.addons_dir.lock().unwrap().clone();
+        extract_zip(
+            &archive(&[
+                ("Example/Example.addon", b"## Title: Example"),
+                ("Example/nested/data.lua", b"return {}"),
+            ])?,
+            &addons,
+            "1",
+        )?;
+        let root = addons.join("Example");
+        for path in [&root, &root.join("nested")] {
+            let mut attributes = std::fs::metadata(path)?.permissions();
+            attributes.set_readonly(true);
+            std::fs::set_permissions(path, attributes)?;
+        }
+
+        let outcome = uninstall_addon(&state, "Example").await?;
+        assert!(outcome.directory_cleanup_warning.is_none(), "{:?}", outcome.directory_cleanup_warning);
+        assert!(!root.exists());
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn read_only_directory_cleanup_preserves_nonempty_directories() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let dir = temp.path().join("shared");
+        std::fs::create_dir(&dir)?;
+        std::fs::write(dir.join("settings.lua"), b"settings")?;
+        let original_permissions = std::fs::metadata(&dir)?.permissions();
+        let mut read_only = original_permissions.clone();
+        read_only.set_readonly(true);
+        std::fs::set_permissions(&dir, read_only)?;
+
+        let kind = remove_empty_dir_windows(&dir).unwrap_err().kind();
+        let still_read_only = std::fs::metadata(&dir)?.permissions().readonly();
+        std::fs::set_permissions(&dir, original_permissions)?;
+        assert_eq!(kind, std::io::ErrorKind::DirectoryNotEmpty);
+        assert!(still_read_only);
+        assert_eq!(std::fs::read(dir.join("settings.lua"))?, b"settings");
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn uninstall_finishes_when_a_remaining_empty_directory_is_locked() -> Result<()> {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+
+        let temp = tempfile::tempdir()?;
+        let state = legacy_state(&temp)?;
+        let addons = state.addons_dir.lock().unwrap().clone();
+        extract_zip(
+            &archive(&[
+                ("Example/Example.addon", b"## Title: Example"),
+                ("Example/nested/data.lua", b"return {}"),
+            ])?,
+            &addons,
+            "1",
+        )?;
+        {
+            let conn = state.db.lock().unwrap();
+            db::set_metadata(&conn, "installed:1", "123")?;
+            db::set_metadata(&conn, "installed_dir:Example", "1")?;
+        }
+        let nested = addons.join("Example/nested");
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&nested)?;
+
+        let outcome = uninstall_addon(&state, "Example").await?;
+        assert!(outcome.directory_cleanup_warning.is_some());
+        assert!(!outcome.preserved_files);
+        assert!(nested.is_dir());
+        assert!(scanner::scan(&addons)?.is_empty());
+        let conn = state.db.lock().unwrap();
+        assert_eq!(db::get_metadata(&conn, "installed:1").as_deref(), Some(""));
+        assert_eq!(db::get_metadata(&conn, "installed_dir:Example").as_deref(), Some(""));
+        drop(lock);
         Ok(())
     }
 

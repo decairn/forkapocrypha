@@ -119,9 +119,11 @@ function UpdateButton({ updating, onUpdate }: { updating: boolean; onUpdate?: ()
 
 function UninstallButton({
   uninstalling,
+  unusedLibrary,
   onUninstall,
 }: {
   uninstalling: boolean;
+  unusedLibrary: boolean;
   onUninstall?: () => void;
 }) {
   if (uninstalling) {
@@ -143,7 +145,7 @@ function UninstallButton({
       className={`${ACTION_BASE} border-[var(--color-border)] bg-[var(--color-surface-low)] text-[var(--color-on-surface-variant)] transition-colors group-hover:border-[var(--color-on-surface-variant)]/40 group-hover:bg-[var(--color-surface-lowest)] hover:!border-[var(--color-error)] hover:text-[var(--color-error)]`}
     >
       <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
-      Uninstall
+      {unusedLibrary ? "Remove" : "Uninstall"}
     </button>
   );
 }
@@ -163,7 +165,7 @@ export function InstalledRow({
       role={onSelect ? "button" : undefined}
       tabIndex={onSelect ? 0 : undefined}
       onKeyDown={(e) => {
-        if (onSelect && (e.key === "Enter" || e.key === " ")) {
+        if (onSelect && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
           e.preventDefault();
           onSelect();
         }
@@ -187,7 +189,7 @@ export function InstalledRow({
           ) : null}
           {addon.unused_lib ? (
             <span
-              title="No other installed addon depends on this library — safe to uninstall."
+              title="No installed addon declares this library as a dependency."
               className="shrink-0 rounded-sm border border-[var(--color-outline-variant)] bg-[var(--color-surface-high)]/40 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--color-tertiary)]"
             >
               Unused
@@ -208,7 +210,7 @@ export function InstalledRow({
         {addon.update_available && addon.catalog_id ? (
           <UpdateButton updating={updating} onUpdate={onUpdate} />
         ) : null}
-        <UninstallButton uninstalling={uninstalling} onUninstall={onUninstall} />
+        <UninstallButton uninstalling={uninstalling} unusedLibrary={addon.unused_lib} onUninstall={onUninstall} />
       </div>
     </article>
   );
