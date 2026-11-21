@@ -28,6 +28,8 @@ pub async fn install_addon(
     app: &AppHandle,
     addon_id: String,
 ) -> Result<Vec<String>> {
+    // Hold one guard for the full dependency tree; install_one recurses without locking.
+    let _mutation_guard = state.addon_fs_mutations.lock().await;
     let mut visited: HashSet<String> = HashSet::new();
     let mut installed_dirs: Vec<String> = Vec::new();
     let mut dependencies = Vec::new();
@@ -399,7 +401,28 @@ pub fn clear_install_marker(state: &AppState, catalog_id: &str, dir_name: &str) 
     let _ = db::set_metadata(&conn, &format!("installed_dir:{}", dir_name), "");
 }
 
-pub fn uninstall(addons_dir: &Path, dir_name: &str) -> Result<PathBuf> {
+pub async fn uninstall_addon(state: &AppState, dir_name: &str) -> Result<PathBuf> {
+    let _mutation_guard = state.addon_fs_mutations.lock().await;
+    let catalog_id = {
+        let conn = state.db.lock().unwrap();
+        let pinned = db::get_metadata(&conn, &format!("installed_dir:{}", dir_name))
+            .filter(|s| !s.is_empty());
+        pinned.or_else(|| {
+            db::find_by_directory(&conn, dir_name)
+                .ok()
+                .flatten()
+                .map(|addon| addon.id)
+        })
+    };
+    let addons_dir = state.addons_dir.lock().unwrap().clone();
+    let removed = uninstall(&addons_dir, dir_name)?;
+    if let Some(id) = catalog_id {
+        clear_install_marker(state, &id, dir_name);
+    }
+    Ok(removed)
+}
+
+fn uninstall(addons_dir: &Path, dir_name: &str) -> Result<PathBuf> {
     // Defense in depth: the command layer also validates, but never trust callers.
     if dir_name.is_empty()
         || dir_name.contains('/')
@@ -437,7 +460,8 @@ pub fn uninstall(addons_dir: &Path, dir_name: &str) -> Result<PathBuf> {
 ///
 /// Idempotent and best-effort: any failure on a single file is logged and
 /// skipped without aborting the rest. A metadata flag prevents repeated work.
-pub fn migrate_live_orphans(state: &AppState) {
+pub async fn migrate_live_orphans(state: &AppState) {
+    let _mutation_guard = state.addon_fs_mutations.lock().await;
     const FLAG_KEY: &str = "migration:live-orphans-v1";
     {
         let conn = state.db.lock().unwrap();
@@ -517,7 +541,39 @@ fn merge_dir_into(src: &Path, dst: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
     use zip::write::SimpleFileOptions;
+
+    #[tokio::test]
+    async fn uninstall_waits_for_other_addon_filesystem_mutations() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addons_dir = temp.path().join("AddOns");
+        let addon_dir = addons_dir.join("Example");
+        std::fs::create_dir_all(&addon_dir)?;
+        let conn = db::open(&temp.path().join("catalog.db"))?;
+        let state = std::sync::Arc::new(AppState {
+            db: std::sync::Mutex::new(conn),
+            addons_dir: std::sync::Mutex::new(addons_dir),
+            addon_fs_mutations: tokio::sync::Mutex::new(()),
+            backups_dir: temp.path().join("backups"),
+            mmoui: crate::api::MmouiClient::new(),
+            syncing: AtomicBool::new(false),
+            close_to_tray: AtomicBool::new(false),
+            auto_update_interval_minutes: AtomicU64::new(0),
+        });
+
+        let mutation_guard = state.addon_fs_mutations.lock().await;
+        let uninstall_state = state.clone();
+        let uninstall =
+            tokio::spawn(async move { uninstall_addon(&uninstall_state, "Example").await });
+        tokio::task::yield_now().await;
+        assert!(addon_dir.exists());
+
+        drop(mutation_guard);
+        uninstall.await??;
+        assert!(!addon_dir.exists());
+        Ok(())
+    }
 
     #[test]
     fn collects_all_required_minimum_versions() -> Result<()> {
