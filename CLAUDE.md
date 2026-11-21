@@ -117,7 +117,7 @@ Project convention:
 - **`main`** — release branch. Tagged commits cut from here become public releases.
 - **`dev`** — active development. Day-to-day commits go here.
 - Feature branches off `dev` when something needs isolation. Otherwise just push to `dev`.
-- `.github/workflows/build.yml` — runs on every push to `dev` and on PRs to `main`. Sanity-builds MSI/AppImage and uploads them as workflow artifacts (for testing, not as a release).
+- `.github/workflows/build.yml` — runs on every push to `dev` or manually. Sanity-builds MSI/AppImage and uploads them as workflow artifacts (for testing, not as a release).
 - `.github/workflows/release.yml` — fires on a `v*` tag push (or via workflow_dispatch). Uses `tauri-apps/tauri-action` to build, sign with the keypair stored in repo secrets, and create a **draft** GitHub Release with the MSI, NSIS, AppImage, `latest.json`, and signature files attached. Edit the draft on GitHub and publish when ready.
 
 ### Release flow
@@ -165,10 +165,9 @@ Document for `icons/README.md` describes this.
 
 ### GitHub Actions CI
 
-`.github/workflows/build.yml` already builds MSI on `windows-latest` and
-AppImage on `ubuntu-latest` on every push/PR to master, with the artifacts
-uploaded. No secrets required for the basic unsigned build. Needs a real
-GitHub remote (`git remote add origin ...`) before it activates.
+`.github/workflows/build.yml` builds MSI on `windows-latest` and
+AppImage on `ubuntu-latest` on pushes to `dev` or manual dispatch, with the
+artifacts uploaded. No secrets are required for the basic unsigned build.
 
 ### Code signing (Windows MSI)
 
