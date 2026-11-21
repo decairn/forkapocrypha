@@ -14,6 +14,8 @@ const OPTIONS: Option[] = [
   { value: 60, label: "Every hour" },
   { value: 120, label: "Every 2 hours" },
   { value: 240, label: "Every 4 hours" },
+  { value: 720, label: "Every 12 hours" },
+  { value: 1440, label: "Every 24 hours" },
 ];
 
 export function AutoUpdatePanel() {
