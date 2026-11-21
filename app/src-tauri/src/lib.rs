@@ -88,16 +88,24 @@ async fn auto_update_loop(handle: tauri::AppHandle) {
         }
 
         // Pull the current list of installed-and-out-of-date addons.
-        let to_update: Vec<String> = match commands::enumerate_installed(&state).await {
+        let to_update: Vec<_> = match commands::enumerate_installed(&state).await {
             Ok(list) => list
                 .into_iter()
                 .filter(|a| a.update_available)
-                .filter_map(|a| a.catalog_id)
+                .filter_map(|a| {
+                    let addon_id = a.catalog_id?;
+                    let addon_title = if a.title.trim().is_empty() {
+                        a.dir_name
+                    } else {
+                        a.title
+                    };
+                    Some((addon_id, addon_title))
+                })
                 .collect(),
             Err(_) => continue,
         };
 
-        for addon_id in to_update {
+        for (addon_id, addon_title) in to_update {
             // The game or settings can change during the scan or a prior install.
             if !can_auto_update() || state.auto_update_interval() != interval {
                 break;
@@ -105,10 +113,14 @@ async fn auto_update_loop(handle: tauri::AppHandle) {
             if let Err(error) =
                 installer::install_addon(state.inner(), &handle, addon_id.clone(), false).await
             {
-                eprintln!("auto-update failed for addon {addon_id}: {error:#}");
+                eprintln!("auto-update failed for {addon_title} (addon {addon_id}): {error:#}");
                 let _ = handle.emit(
                     "addon:install:error",
-                    &serde_json::json!({ "id": &addon_id, "error": error.to_string() }),
+                    &serde_json::json!({
+                        "id": addon_id,
+                        "error": error.to_string(),
+                        "addon_title": addon_title,
+                    }),
                 );
             }
         }
