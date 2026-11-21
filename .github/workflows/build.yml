@@ -1,12 +1,10 @@
 name: build
 
-# Sanity build on every dev push and every PR aimed at main.
+# Sanity build on every dev push.
 # Releases are handled in release.yml on tag push, not here.
 on:
   push:
     branches: [dev]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
