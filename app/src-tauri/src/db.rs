@@ -9,11 +9,42 @@ pub fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let conn = Connection::open(path)?;
+    let mut conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     create_schema(&conn)?;
+    backfill_installed_versions(&mut conn)?;
     Ok(conn)
+}
+
+fn backfill_installed_versions(conn: &mut Connection) -> Result<()> {
+    let schema_version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if schema_version >= 1 {
+        return Ok(());
+    }
+
+    // Capture the cached label before the first sync can replace it. Legacy
+    // installs only recorded the timestamp, so use rows that still match it.
+    let tx = conn.transaction()?;
+    tx.execute(
+        r#"
+        INSERT OR IGNORE INTO metadata (key, value)
+        SELECT 'installed_version:' || addons.id, addons.version
+        FROM addons
+        JOIN metadata AS marker ON marker.key = 'installed:' || addons.id
+        WHERE CAST(marker.value AS INTEGER) > 0
+          AND CASE WHEN CAST(marker.value AS INTEGER) > 100000000000
+                   THEN CAST(marker.value AS INTEGER) / 1000
+                   ELSE CAST(marker.value AS INTEGER) END
+            = CASE WHEN addons.last_updated > 100000000000
+                   THEN addons.last_updated / 1000
+                   ELSE addons.last_updated END
+        "#,
+        [],
+    )?;
+    tx.pragma_update(None, "user_version", 1)?;
+    tx.commit()?;
+    Ok(())
 }
 
 fn create_schema(conn: &Connection) -> Result<()> {

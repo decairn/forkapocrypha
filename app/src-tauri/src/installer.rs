@@ -11,6 +11,7 @@ use tauri::{ipc::Channel, AppHandle, Emitter, Manager};
 use tokio::sync::oneshot;
 
 use crate::db;
+use crate::models::Addon;
 use crate::scanner;
 use crate::state::AppState;
 
@@ -130,6 +131,10 @@ async fn install_one(
         return Ok(());
     }
 
+    // Sync can advance the catalog during the download or conflict review.
+    // Record the listing we started from so a concurrent sync stays visible.
+    let catalog_entry = db::find_by_id(&state.db.lock().unwrap(), &addon_id)?;
+
     let _ = app.emit(
         "addon:install:progress",
         InstallProgress {
@@ -163,7 +168,7 @@ async fn install_one(
     );
 
     std::fs::create_dir_all(addons_dir)?;
-    let staged = stage_install(&bytes, addons_dir, &addon_id)?;
+    let staged = stage_install(&bytes, addons_dir, &addon_id, catalog_entry.as_ref())?;
     let saved_backup = if staged.conflicts.is_empty() {
         None
     } else {
@@ -233,31 +238,9 @@ async fn install_one(
         },
     );
 
-    // Record the catalog timestamp we just landed on. The next scan compares
-    // this marker against the addon's current catalog.last_updated — useful
-    // when an author bumps the ESOUI submission but forgets to bump the
-    // `## Version:` line inside the manifest, which would otherwise leave the
-    // row stuck on "Update available" forever.
-    //
-    // Also persist `installed_dir:{dir}` → catalog_id for every root dir we
-    // just dropped (including auxiliary folders like `gamedata/` / `EsoUI/`
-    // that translation addons ship). Two catalog rows can declare the same
-    // directory (e.g. EsoBR 2256 and the obsolete ESOBR Reforged 4541 both
-    // ship `EsoBR_Reforged/`) — without this mapping the UI would guess which
-    // catalog row owns the dir via `find_by_directory`, non-deterministically.
-    {
-        let conn = state.db.lock().unwrap();
-        if let Ok(Some(addon)) = db::find_by_id(&conn, &addon_id) {
-            let key = format!("installed:{}", addon.id);
-            let _ = db::set_metadata(&conn, &key, &addon.last_updated.to_string());
-            let at_key = format!("installed_at:{}", addon.id);
-            let _ = db::set_metadata(&conn, &at_key, &Utc::now().to_rfc3339());
-
-            for dir in &extracted {
-                let dir_key = format!("installed_dir:{}", dir);
-                let _ = db::set_metadata(&conn, &dir_key, &addon.id);
-            }
-        }
+    if let Some(addon) = catalog_entry {
+        record_install(&mut state.db.lock().unwrap(), &addon, &extracted)
+            .context("addon files were installed but recording the install failed")?;
     }
 
     let deps = collect_dependencies(addons_dir, &extracted)?;
@@ -297,6 +280,32 @@ async fn install_one(
     Ok(())
 }
 
+fn record_install(conn: &mut rusqlite::Connection, addon: &Addon, roots: &[String]) -> Result<()> {
+    let id = &addon.id;
+    let tx = conn.transaction()?;
+    db::set_metadata(
+        &tx,
+        &format!("installed:{id}"),
+        &addon.last_updated.to_string(),
+    )?;
+    clear_legacy_installed_version(&tx, id)?;
+    db::set_metadata(&tx, &format!("installed_at:{id}"), &Utc::now().to_rfc3339())?;
+    // Pin every package root, including auxiliary directories and shared names.
+    for root in roots {
+        db::set_metadata(&tx, &format!("installed_dir:{root}"), id)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+fn clear_legacy_installed_version(conn: &rusqlite::Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM metadata WHERE key = ?1",
+        [format!("installed_version:{id}")],
+    )?;
+    Ok(())
+}
+
 /// Root dir names that are zip packaging garbage (macOS Finder leftovers) and
 /// should never be extracted. About 19 catalog entries currently ship a
 /// `__MACOSX/` next to their real addon.
@@ -307,8 +316,43 @@ fn is_noise_root(name: &str) -> bool {
 const OWNERSHIP_FILE: &str = ".apocrypha-ownership.json";
 
 #[derive(Default, Serialize, Deserialize)]
-struct Ownership {
+pub(crate) struct Ownership {
     files: BTreeMap<String, OwnedFile>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) releases: BTreeMap<String, InstalledRelease>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct InstalledRelease {
+    pub(crate) version: String,
+    pub(crate) last_updated: i64,
+}
+
+impl Ownership {
+    pub(crate) fn read(addons_dir: &Path) -> Option<Self> {
+        load_ownership(addons_dir)
+            .ok()
+            .map(|(ownership, _)| ownership)
+    }
+
+    pub(crate) fn owns_manifest(&self, addons_dir: &Path, dir_name: &str, addon_id: &str) -> bool {
+        let Some(manifest) = scanner::locate_manifest(&addons_dir.join(dir_name), dir_name) else {
+            return false;
+        };
+        let Some(rel) = manifest.strip_prefix(addons_dir).ok() else {
+            return false;
+        };
+        let Some(owned) = path_key(rel).ok().and_then(|key| self.files.get(&key)) else {
+            return false;
+        };
+        owned.addon_id == addon_id
+            && (cfg!(windows) || Path::new(&owned.path) == rel)
+            && existing_file(addons_dir, rel)
+                .ok()
+                .flatten()
+                .and_then(|path| hash_file(&path).ok())
+                .is_some_and(|fingerprint| fingerprint == owned.fingerprint)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -591,7 +635,7 @@ fn extract_zip_with_resolution(
     addon_id: &str,
     resolve: &mut impl FnMut(&[FileConflict]) -> Result<()>,
 ) -> Result<Vec<String>> {
-    let staged = stage_install(bytes, addons_dir, addon_id)?;
+    let staged = stage_install(bytes, addons_dir, addon_id, None)?;
     if !staged.conflicts.is_empty() {
         resolve(&staged.conflicts)?;
     }
@@ -614,7 +658,12 @@ impl StagedInstall {
     }
 }
 
-fn stage_install(bytes: &[u8], addons_dir: &Path, addon_id: &str) -> Result<StagedInstall> {
+fn stage_install(
+    bytes: &[u8],
+    addons_dir: &Path,
+    addon_id: &str,
+    catalog_entry: Option<&Addon>,
+) -> Result<StagedInstall> {
     ensure_no_unfinished_install(addons_dir)?;
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
     if archive.len() > 100_000 {
@@ -844,6 +893,17 @@ fn stage_install(bytes: &[u8], addons_dir: &Path, addon_id: &str) -> Result<Stag
                 fingerprint: hash_file(&staged.join(rel))?,
             },
         );
+    }
+    if let Some(addon) = catalog_entry {
+        ownership.releases.insert(
+            addon_id.to_string(),
+            InstalledRelease {
+                version: addon.version.clone(),
+                last_updated: addon.last_updated,
+            },
+        );
+    } else {
+        ownership.releases.remove(addon_id);
     }
     std::fs::write(staged.join(OWNERSHIP_FILE), serde_json::to_vec(&ownership)?)?;
     changes.push(FileChange {
@@ -1260,6 +1320,7 @@ pub async fn uninstall_addon(state: &AppState, dir_name: &str) -> Result<Uninsta
         let mut conn = state.db.lock().unwrap();
         let tx = conn.transaction()?;
         db::set_metadata(&tx, &format!("installed:{id}"), "")?;
+        clear_legacy_installed_version(&tx, &id)?;
         db::set_metadata(&tx, &format!("installed_at:{id}"), "")?;
         for root in roots {
             let key = format!("installed_dir:{root}");
@@ -1459,6 +1520,7 @@ fn uninstall(
         }
     }
     ownership.files.retain(|_, entry| entry.addon_id != owner);
+    ownership.releases.remove(&owner);
     let work = tempfile::Builder::new()
         .prefix(".apocrypha-install-")
         .tempdir_in(addons_dir)?;
@@ -1866,6 +1928,126 @@ mod tests {
             close_to_tray: AtomicBool::new(false),
             auto_update_interval_minutes: AtomicU64::new(0),
         })
+    }
+
+    const LIBZONE_MANIFEST: &[u8] = b"## Title: LibZone\n## Version: 9.01\n## AddOnVersion: 0901\n";
+    const LIBZONE_TIMESTAMP: i64 = 1790614924;
+
+    fn libzone_listing() -> Addon {
+        Addon {
+            id: "2171".into(),
+            category_id: Some("53".into()),
+            name: "LibZone".into(),
+            author: String::new(),
+            version: "9.1".into(),
+            last_updated: LIBZONE_TIMESTAMP,
+            download_total: 0,
+            download_monthly: 0,
+            favorite_total: 0,
+            directories: vec!["LibZone".into()],
+            file_info_url: None,
+            thumbnail_url: None,
+            images: vec![],
+        }
+    }
+
+    fn libzone_archive() -> Result<Vec<u8>> {
+        archive(&[
+            ("LibZone/LibZone.addon", LIBZONE_MANIFEST),
+            ("LibZone/LibZone.lua", b"LibZone = {}"),
+        ])
+    }
+
+    async fn scanned_libzone(state: &AppState) -> Result<crate::models::InstalledAddon> {
+        crate::commands::enumerate_installed(state)
+            .await?
+            .into_iter()
+            .find(|addon| addon.dir_name == "LibZone")
+            .context("LibZone was not scanned")
+    }
+
+    #[tokio::test]
+    async fn installed_release_clears_libzone_offer_until_the_listing_changes() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let state = legacy_state(&temp)?;
+        let addons = state.addons_dir.lock().unwrap().clone();
+        let mut listing = libzone_listing();
+        db::upsert_addons(&mut state.db.lock().unwrap(), &[listing.clone()])?;
+        let roots = stage_install(&libzone_archive()?, &addons, &listing.id, Some(&listing))?
+            .commit(&addons)?;
+        record_install(&mut state.db.lock().unwrap(), &listing, &roots)?;
+
+        let installed = scanned_libzone(&state).await?;
+        assert_eq!(installed.version.as_deref(), Some("9.01"));
+        assert_eq!(installed.catalog_version.as_deref(), Some("9.1"));
+        assert!(!installed.update_available);
+
+        // The listing now agrees with the old manifest, at the same timestamp.
+        listing.version = "9.01".into();
+        db::upsert_addons(&mut state.db.lock().unwrap(), &[listing.clone()])?;
+        assert!(scanned_libzone(&state).await?.update_available);
+        let roots = stage_install(&libzone_archive()?, &addons, &listing.id, Some(&listing))?
+            .commit(&addons)?;
+        record_install(&mut state.db.lock().unwrap(), &listing, &roots)?;
+        assert!(!scanned_libzone(&state).await?.update_available);
+
+        listing.last_updated += 1;
+        db::upsert_addons(&mut state.db.lock().unwrap(), &[listing.clone()])?;
+        assert!(scanned_libzone(&state).await?.update_available);
+
+        // An external install no longer has the recorded manifest.
+        let manifest = addons.join("LibZone/LibZone.addon");
+        std::fs::write(&manifest, b"## Version: 9.10\n")?;
+        assert!(scanned_libzone(&state).await?.update_available);
+        std::fs::write(&manifest, b"## Version: 9.01\n")?;
+        assert!(!scanned_libzone(&state).await?.update_available);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upgrades_legacy_libzone_marker_before_sync_changes_the_listing() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut state = legacy_state(&temp)?;
+        let addons = state.addons_dir.lock().unwrap().clone();
+        let mut listing = libzone_listing();
+        extract_zip(&libzone_archive()?, &addons, &listing.id)?;
+        {
+            let conn = state.db.get_mut().unwrap();
+            db::upsert_addons(conn, &[listing.clone()])?;
+            db::set_metadata(conn, "installed:2171", &LIBZONE_TIMESTAMP.to_string())?;
+            db::set_metadata(conn, "installed_dir:LibZone", "2171")?;
+            conn.pragma_update(None, "user_version", 0)?;
+        }
+        *state.db.get_mut().unwrap() = db::open(&temp.path().join("catalog.db"))?;
+
+        // App startup can sync before the first installed scan.
+        listing.version = "9.01".into();
+        db::upsert_addons(&mut state.db.lock().unwrap(), &[listing.clone()])?;
+        assert!(scanned_libzone(&state).await?.update_available);
+
+        listing.version = "9.1".into();
+        db::upsert_addons(&mut state.db.lock().unwrap(), &[listing])?;
+        assert!(!scanned_libzone(&state).await?.update_available);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn untracked_libzone_keeps_its_distinct_manifest_version() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let state = legacy_state(&temp)?;
+        let dir = state.addons_dir.lock().unwrap().join("LibZone");
+        std::fs::create_dir(&dir)?;
+        std::fs::write(dir.join("LibZone.addon"), LIBZONE_MANIFEST)?;
+        db::upsert_addons(&mut state.db.lock().unwrap(), &[libzone_listing()])?;
+        assert!(scanned_libzone(&state).await?.update_available);
+
+        {
+            let conn = state.db.lock().unwrap();
+            db::set_metadata(&conn, "installed:2171", &LIBZONE_TIMESTAMP.to_string())?;
+            db::set_metadata(&conn, "installed_version:2171", "9.1")?;
+        }
+        assert!(scanned_libzone(&state).await?.update_available);
+        Ok(())
     }
 
     #[tokio::test]
@@ -2317,6 +2499,7 @@ mod tests {
         )?;
         let conn = db::open(&temp.path().join("catalog.db"))?;
         db::set_metadata(&conn, "installed:1", "123")?;
+        db::set_metadata(&conn, "installed_version:1", "1.0")?;
         db::set_metadata(&conn, "installed_at:1", "date")?;
         db::set_metadata(&conn, "installed_dir:Example", "1")?;
         db::set_metadata(&conn, "installed_dir:shared", "2")?;
@@ -2333,6 +2516,7 @@ mod tests {
         uninstall_addon(&state, "Example").await?;
         let conn = state.db.lock().unwrap();
         assert_eq!(db::get_metadata(&conn, "installed:1").as_deref(), Some(""));
+        assert_eq!(db::get_metadata(&conn, "installed_version:1"), None);
         assert_eq!(
             db::get_metadata(&conn, "installed_at:1").as_deref(),
             Some("")
