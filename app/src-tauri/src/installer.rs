@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::db;
 use crate::scanner;
@@ -28,6 +29,7 @@ pub async fn install_addon(
     state: &AppState,
     app: &AppHandle,
     addon_id: String,
+    interactive: bool,
 ) -> Result<Vec<String>> {
     // Hold one guard for the full dependency tree; install_one recurses without locking.
     let _mutation_guard = state.addon_fs_mutations.lock().await;
@@ -44,6 +46,7 @@ pub async fn install_addon(
             &mut visited,
             &mut installed_dirs,
             &mut dependencies,
+            interactive,
         )
         .await?;
         validate_dependencies(&addons_dir, &dependencies)?;
@@ -62,6 +65,7 @@ async fn install_one(
     visited: &mut HashSet<String>,
     installed_dirs: &mut Vec<String>,
     dependencies: &mut Vec<Dependency>,
+    interactive: bool,
 ) -> Result<()> {
     if !visited.insert(addon_id.clone()) {
         return Ok(());
@@ -100,7 +104,53 @@ async fn install_one(
     );
 
     std::fs::create_dir_all(addons_dir)?;
-    let extracted = extract_zip(&bytes, addons_dir, &addon_id)?;
+    let mut saved_backup = None;
+    let result = extract_zip_with_resolution(&bytes, addons_dir, &addon_id, &mut |conflicts| {
+        if !interactive {
+            return Err(anyhow!("update requires approval for existing untracked or modified files; update this addon manually in Apocrypha"));
+        }
+        let backup = backup_conflicts(addons_dir, &state.backups_dir, &addon_id, conflicts)?;
+        let preview = conflicts
+            .iter()
+            .take(12)
+            .map(|c| format!("{}: {} ({})", c.operation, c.rel.display(), c.action))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let prompt = format!(
+                "This update would replace or remove {} existing untracked or modified file(s). They might belong to another addon.\n\n{}\n\nThe full list and copies of the originals are in:\n{}\n\nReview conflicts.txt there before choosing. If you continue, replacement files are recorded as belonging to this addon and may be removed on uninstall. The originals will be kept for manual recovery.",
+                conflicts.len(), preview, backup.path().display()
+            );
+        if !app
+            .dialog()
+            .message(prompt)
+            .title("Review addon file conflicts")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancel)
+            .blocking_show()
+        {
+            backup
+                .close()
+                .context("failed to remove cancelled conflict backup")?;
+            return Err(anyhow!(
+                "update cancelled; conflicting files were not changed"
+            ));
+        }
+        verify_conflict_backup(addons_dir, backup.path(), conflicts)?;
+        let path = backup.keep();
+        let _ = app.emit(
+            "addon:install:backup",
+            serde_json::json!({ "id": &addon_id, "path": path.to_string_lossy() }),
+        );
+        saved_backup = Some(path);
+        Ok(())
+    });
+    let extracted = result.map_err(|error| match saved_backup {
+        Some(path) => anyhow!(
+            "{error:#}; original conflicting files are backed up at {}",
+            path.display()
+        ),
+        None => error,
+    })?;
     for d in &extracted {
         if !installed_dirs.contains(d) {
             installed_dirs.push(d.clone());
@@ -162,6 +212,7 @@ async fn install_one(
                 visited,
                 installed_dirs,
                 dependencies,
+                interactive,
             ))
             .await?;
         } else if let Some(min_version) = dep.min_version {
@@ -214,6 +265,85 @@ struct FileChange {
     expected_hash: Option<FileFingerprint>,
 }
 
+struct FileConflict {
+    rel: PathBuf,
+    fingerprint: FileFingerprint,
+    operation: &'static str,
+    action: &'static str,
+}
+
+fn backup_conflicts(
+    addons_dir: &Path,
+    backups_dir: &Path,
+    addon_id: &str,
+    conflicts: &[FileConflict],
+) -> Result<tempfile::TempDir> {
+    let parent = backups_dir.join("addon-file-conflicts");
+    std::fs::create_dir_all(&parent)?;
+    if parent
+        .canonicalize()?
+        .starts_with(addons_dir.canonicalize()?)
+    {
+        return Err(anyhow!(
+            "conflict backups must be stored outside the AddOns folder"
+        ));
+    }
+    let backup = tempfile::Builder::new()
+        .prefix("conflict-")
+        .tempdir_in(&parent)?;
+    let files_dir = backup.path().join("files");
+    std::fs::create_dir(&files_dir)?;
+    let mut list = format!(
+        "Addon catalog ID: {addon_id}\nOriginal AddOns folder: {}\n\nOriginal conflict files are under files/ using these relative paths; this is not a full addon backup.\nTo restore, close Apocrypha and ESO, back up the current files, then copy the desired originals to the corresponding paths in AddOns. If restoring a manifest, remove the newer alternate extension so the game cannot load both. Restored files will need conflict resolution on the next update.\n\n",
+        addons_dir.display()
+    );
+    for item in conflicts {
+        let source = existing_file(addons_dir, &item.rel)?
+            .ok_or_else(|| conflict(&item.rel, "file disappeared before backup"))?;
+        if hash_file(&source)? != item.fingerprint {
+            return Err(conflict(&item.rel, "file changed before backup"));
+        }
+        let destination = files_dir.join(&item.rel);
+        std::fs::create_dir_all(destination.parent().unwrap())?;
+        std::fs::copy(&source, &destination)?;
+        if hash_file(&destination)?.sha256 != item.fingerprint.sha256
+            || hash_file(&source)? != item.fingerprint
+        {
+            return Err(conflict(&item.rel, "file changed during backup"));
+        }
+        list.push_str(&format!(
+            "{}: {} ({})\n",
+            item.operation,
+            item.rel.display(),
+            item.action
+        ));
+    }
+    std::fs::write(backup.path().join("conflicts.txt"), list)?;
+    Ok(backup)
+}
+
+fn verify_conflict_backup(
+    addons_dir: &Path,
+    backup: &Path,
+    conflicts: &[FileConflict],
+) -> Result<()> {
+    if existing_file(backup, Path::new("conflicts.txt"))?.is_none() {
+        return Err(anyhow!("conflict backup list is missing"));
+    }
+    for item in conflicts {
+        let original = existing_file(addons_dir, &item.rel)?
+            .ok_or_else(|| conflict(&item.rel, "file disappeared during review"))?;
+        let saved = existing_file(&backup.join("files"), &item.rel)?
+            .ok_or_else(|| conflict(&item.rel, "backup disappeared during review"))?;
+        if hash_file(&original)? != item.fingerprint
+            || hash_file(&saved)?.sha256 != item.fingerprint.sha256
+        {
+            return Err(conflict(&item.rel, "file or backup changed during review"));
+        }
+    }
+    Ok(())
+}
+
 fn path_key(path: &Path) -> Result<String> {
     let mut parts = Vec::new();
     for component in path.components() {
@@ -224,7 +354,8 @@ fn path_key(path: &Path) -> Result<String> {
             .to_str()
             .ok_or_else(|| anyhow!("invalid ownership path"))?;
         let base = name.split('.').next().unwrap_or("").to_ascii_uppercase();
-        if name.contains(['\\', ':'])
+        if name.chars().any(char::is_control)
+            || name.contains(['\\', ':'])
             || name.ends_with(['.', ' '])
             || matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL")
             || (base.len() == 4
@@ -352,7 +483,14 @@ fn conflict(path: &Path, reason: &str) -> anyhow::Error {
     )
 }
 
+#[cfg(test)]
 fn extract_zip(bytes: &[u8], addons_dir: &Path, addon_id: &str) -> Result<Vec<String>> {
+    extract_zip_with_resolution(bytes, addons_dir, addon_id, &mut |conflicts| {
+        Err(conflict(&conflicts[0].rel, conflicts[0].action))
+    })
+}
+
+fn ensure_no_unfinished_install(addons_dir: &Path) -> Result<()> {
     for entry in std::fs::read_dir(addons_dir)? {
         let entry = entry?;
         if entry
@@ -367,6 +505,16 @@ fn extract_zip(bytes: &[u8], addons_dir: &Path, addon_id: &str) -> Result<Vec<St
             ));
         }
     }
+    Ok(())
+}
+
+fn extract_zip_with_resolution(
+    bytes: &[u8],
+    addons_dir: &Path,
+    addon_id: &str,
+    resolve: &mut impl FnMut(&[FileConflict]) -> Result<()>,
+) -> Result<Vec<String>> {
+    ensure_no_unfinished_install(addons_dir)?;
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
     if archive.len() > 100_000 {
         return Err(anyhow!("archive contains too many entries"));
@@ -411,7 +559,8 @@ fn extract_zip(bytes: &[u8], addons_dir: &Path, addon_id: &str) -> Result<Vec<St
                 .to_str()
                 .ok_or_else(|| anyhow!("invalid zip entry name"))?;
             let base = name.split('.').next().unwrap_or("").to_ascii_uppercase();
-            if name.ends_with(['.', ' '])
+            if name.chars().any(char::is_control)
+                || name.ends_with(['.', ' '])
                 || matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL")
                 || (base.len() == 4
                     && (base.starts_with("COM") || base.starts_with("LPT"))
@@ -469,8 +618,9 @@ fn extract_zip(bytes: &[u8], addons_dir: &Path, addon_id: &str) -> Result<Vec<St
         }
     }
 
-    // Both extensions can be loaded by the game. An unowned alternate must
-    // never be silently left beside the new manifest or removed.
+    let mut changes = Vec::new();
+    let mut conflicts = Vec::new();
+    // Both extensions can be loaded by the game.
     for root in &root_dirs {
         let txt = PathBuf::from(root).join(format!("{root}.txt"));
         let addon = PathBuf::from(root).join(format!("{root}.addon"));
@@ -487,24 +637,34 @@ fn extract_zip(bytes: &[u8], addons_dir: &Path, addon_id: &str) -> Result<Vec<St
             None
         };
         if let Some(alternate) = alternate {
-            if existing_file(addons_dir, &alternate)?.is_some()
-                && !ownership
-                    .files
-                    .get(&path_key(&alternate)?)
-                    .is_some_and(|entry| {
-                        entry.addon_id == addon_id
-                            && (cfg!(windows) || Path::new(&entry.path) == alternate)
-                    })
-            {
-                return Err(conflict(
-                    &alternate,
-                    "alternate manifest has unknown or different ownership",
-                ));
+            if let Some(path) = existing_file(addons_dir, &alternate)? {
+                match ownership.files.get(&path_key(&alternate)?) {
+                    Some(entry) if entry.addon_id != addon_id => {
+                        return Err(conflict(
+                            &alternate,
+                            "alternate manifest belongs to another addon",
+                        ));
+                    }
+                    Some(entry) if cfg!(windows) || Path::new(&entry.path) == alternate => {}
+                    _ => {
+                        let fingerprint = hash_file(&path)?;
+                        conflicts.push(FileConflict {
+                            rel: alternate.clone(),
+                            fingerprint: fingerprint.clone(),
+                            operation: "Remove",
+                            action: "alternate manifest has unknown ownership",
+                        });
+                        changes.push(FileChange {
+                            rel: alternate,
+                            install: false,
+                            expected_hash: Some(fingerprint),
+                        });
+                    }
+                }
             }
         }
     }
 
-    let mut changes = Vec::new();
     for (key, entry) in &ownership.files {
         if entry.addon_id != addon_id || incoming.contains_key(key) {
             continue;
@@ -513,7 +673,12 @@ fn extract_zip(bytes: &[u8], addons_dir: &Path, addon_id: &str) -> Result<Vec<St
         if let Some(path) = existing_file(addons_dir, &rel)? {
             let current = hash_file(&path)?;
             if current != entry.fingerprint {
-                return Err(conflict(&rel, "previously installed file was modified"));
+                conflicts.push(FileConflict {
+                    rel: rel.clone(),
+                    fingerprint: current.clone(),
+                    operation: "Remove",
+                    action: "previously installed file was modified",
+                });
             }
             changes.push(FileChange {
                 rel,
@@ -543,9 +708,19 @@ fn extract_zip(bytes: &[u8], addons_dir: &Path, addon_id: &str) -> Result<Vec<St
         }
         if let Some(hash) = &current {
             match previous {
-                None => return Err(conflict(rel, "file ownership is unknown")),
+                None => conflicts.push(FileConflict {
+                    rel: (*rel).clone(),
+                    fingerprint: hash.clone(),
+                    operation: "Replace",
+                    action: "file ownership is unknown",
+                }),
                 Some(entry) if &entry.fingerprint != hash => {
-                    return Err(conflict(rel, "previously installed file was modified"))
+                    conflicts.push(FileConflict {
+                        rel: (*rel).clone(),
+                        fingerprint: hash.clone(),
+                        operation: "Replace",
+                        action: "previously installed file was modified",
+                    });
                 }
                 _ => {}
             }
@@ -555,6 +730,9 @@ fn extract_zip(bytes: &[u8], addons_dir: &Path, addon_id: &str) -> Result<Vec<St
             install: true,
             expected_hash: current,
         });
+    }
+    if !conflicts.is_empty() {
+        resolve(&conflicts)?;
     }
     ownership
         .files
@@ -575,12 +753,25 @@ fn extract_zip(bytes: &[u8], addons_dir: &Path, addon_id: &str) -> Result<Vec<St
         install: true,
         expected_hash: registry_hash,
     });
+    commit_file_changes(work, addons_dir, &staged, &backup, &changes)?;
+    let mut roots: Vec<_> = root_dirs.into_iter().collect();
+    roots.sort();
+    Ok(roots)
+}
+
+fn commit_file_changes(
+    work: tempfile::TempDir,
+    addons_dir: &Path,
+    staged: &Path,
+    backup: &Path,
+    changes: &[FileChange],
+) -> Result<()> {
     std::fs::write(
         work.path().join("journal.json"),
-        serde_json::to_vec(&changes)?,
+        serde_json::to_vec(changes)?,
     )?;
     if let Err((error, rollback_failed)) =
-        replace_files(addons_dir, &staged, &backup, &changes, |from, to| {
+        replace_files(addons_dir, staged, backup, changes, |from, to| {
             std::fs::rename(from, to)
         })
     {
@@ -594,10 +785,8 @@ fn extract_zip(bytes: &[u8], addons_dir: &Path, addon_id: &str) -> Result<Vec<St
         return Err(error);
     }
     work.close()
-        .context("installation succeeded but temporary backup cleanup failed")?;
-    let mut roots: Vec<_> = root_dirs.into_iter().collect();
-    roots.sort();
-    Ok(roots)
+        .context("file changes succeeded but temporary backup cleanup failed")?;
+    Ok(())
 }
 
 // Files are moved within the same filesystem; each old file remains in backup
@@ -834,39 +1023,42 @@ fn validate_dependency_version(addons_dir: &Path, dep: &Dependency) -> Result<()
     Ok(())
 }
 
-/// Clear the install markers we wrote during the most recent install of this
-/// addon. Used by the uninstall path so a future re-install starts fresh
-/// instead of inheriting the previous marker.
-pub fn clear_install_marker(state: &AppState, catalog_id: &str, dir_name: &str) {
-    let conn = state.db.lock().unwrap();
-    let _ = db::set_metadata(&conn, &format!("installed:{}", catalog_id), "");
-    let _ = db::set_metadata(&conn, &format!("installed_at:{}", catalog_id), "");
-    let _ = db::set_metadata(&conn, &format!("installed_dir:{}", dir_name), "");
+pub struct UninstallOutcome {
+    pub preserved_files: bool,
 }
 
-pub async fn uninstall_addon(state: &AppState, dir_name: &str) -> Result<PathBuf> {
+pub async fn uninstall_addon(state: &AppState, dir_name: &str) -> Result<UninstallOutcome> {
     let _mutation_guard = state.addon_fs_mutations.lock().await;
-    let catalog_id = {
-        let conn = state.db.lock().unwrap();
-        let pinned = db::get_metadata(&conn, &format!("installed_dir:{}", dir_name))
-            .filter(|s| !s.is_empty());
-        pinned.or_else(|| {
-            db::find_by_directory(&conn, dir_name)
-                .ok()
-                .flatten()
-                .map(|addon| addon.id)
-        })
-    };
     let addons_dir = state.addons_dir.lock().unwrap().clone();
-    let removed = uninstall(&addons_dir, dir_name)?;
-    if let Some(id) = catalog_id {
-        clear_install_marker(state, &id, dir_name);
-    }
-    Ok(removed)
+    let (id, roots, outcome) = uninstall(&addons_dir, dir_name)?;
+    let cleanup = (|| -> Result<()> {
+        use rusqlite::OptionalExtension;
+        let mut conn = state.db.lock().unwrap();
+        let tx = conn.transaction()?;
+        db::set_metadata(&tx, &format!("installed:{id}"), "")?;
+        db::set_metadata(&tx, &format!("installed_at:{id}"), "")?;
+        for root in roots {
+            let key = format!("installed_dir:{root}");
+            let pinned: Option<String> = tx
+                .query_row("SELECT value FROM metadata WHERE key = ?1", [&key], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            if pinned.as_deref() == Some(&id) {
+                db::set_metadata(&tx, &key, "")?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    })();
+    cleanup.context("addon files were removed but metadata cleanup failed")?;
+    Ok(outcome)
 }
 
-fn uninstall(addons_dir: &Path, dir_name: &str) -> Result<PathBuf> {
-    // Defense in depth: the command layer also validates, but never trust callers.
+fn uninstall(
+    addons_dir: &Path,
+    dir_name: &str,
+) -> Result<(String, HashSet<String>, UninstallOutcome)> {
     if dir_name.is_empty()
         || dir_name.contains('/')
         || dir_name.contains('\\')
@@ -874,21 +1066,116 @@ fn uninstall(addons_dir: &Path, dir_name: &str) -> Result<PathBuf> {
     {
         return Err(anyhow!("invalid addon directory name"));
     }
+    path_key(Path::new(dir_name))?;
     let target = addons_dir.join(dir_name);
-    if !target.exists() {
-        return Err(anyhow!("addon directory not found"));
+    match std::fs::symlink_metadata(&target) {
+        Ok(meta) if meta.file_type().is_dir() => {}
+        Ok(_) => return Err(anyhow!("target is not a real addon directory")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(anyhow!("addon directory not found"))
+        }
+        Err(e) => return Err(e.into()),
     }
-    if !target.is_dir() {
-        return Err(anyhow!("target is not a directory"));
+    ensure_no_unfinished_install(addons_dir)?;
+    let (mut ownership, registry_hash) = load_ownership(addons_dir)?;
+    let mut owner: Option<String> = None;
+    for extension in ["txt", "addon"] {
+        let rel = PathBuf::from(dir_name).join(format!("{dir_name}.{extension}"));
+        let Some(path) = existing_file(addons_dir, &rel)? else {
+            continue;
+        };
+        let entry = ownership.files.get(&path_key(&rel)?)
+            .filter(|entry| cfg!(windows) || Path::new(&entry.path) == rel)
+            .ok_or_else(|| anyhow!("cannot safely uninstall {dir_name}: manifest ownership is unknown; legacy files are left untouched"))?;
+        if hash_file(&path)? != entry.fingerprint {
+            return Err(anyhow!(
+                "cannot safely uninstall {dir_name}: manifest was modified or replaced"
+            ));
+        }
+        if owner.as_ref().is_some_and(|id| id != &entry.addon_id) {
+            return Err(anyhow!(
+                "cannot safely uninstall {dir_name}: manifests belong to different addons"
+            ));
+        }
+        owner = Some(entry.addon_id.clone());
     }
-    // Canonicalize and verify the target is inside addons_dir.
-    let canon_addons = addons_dir.canonicalize()?;
-    let canon_target = target.canonicalize()?;
-    if !canon_target.starts_with(&canon_addons) {
-        return Err(anyhow!("target escapes addons folder"));
+    let owner = owner.ok_or_else(|| anyhow!("cannot safely uninstall {dir_name}: no tracked manifest; legacy files are left untouched"))?;
+    let mut changes = Vec::new();
+    let mut dirs = HashSet::new();
+    let mut roots = HashSet::new();
+    for entry in ownership
+        .files
+        .values()
+        .filter(|entry| entry.addon_id == owner)
+    {
+        let rel = PathBuf::from(&entry.path);
+        if let Some(Component::Normal(root)) = rel.components().next() {
+            roots.insert(root.to_string_lossy().into_owned());
+        }
+        if let Some(path) = existing_file(addons_dir, &rel)? {
+            let fingerprint = hash_file(&path)?;
+            if fingerprint != entry.fingerprint {
+                return Err(conflict(
+                    &rel,
+                    "owned file was modified; uninstall was not started",
+                ));
+            }
+            let mut parent = rel.parent();
+            while let Some(dir) = parent {
+                if dir.as_os_str().is_empty() {
+                    break;
+                }
+                dirs.insert(dir.to_path_buf());
+                parent = dir.parent();
+            }
+            changes.push(FileChange {
+                rel,
+                install: false,
+                expected_hash: Some(fingerprint),
+            });
+        }
     }
-    std::fs::remove_dir_all(&canon_target)?;
-    Ok(canon_target)
+    ownership.files.retain(|_, entry| entry.addon_id != owner);
+    let work = tempfile::Builder::new()
+        .prefix(".apocrypha-install-")
+        .tempdir_in(addons_dir)?;
+    let staged = work.path().join("staged");
+    let backup = work.path().join("backup");
+    std::fs::create_dir(&staged)?;
+    std::fs::create_dir(&backup)?;
+    std::fs::write(staged.join(OWNERSHIP_FILE), serde_json::to_vec(&ownership)?)?;
+    changes.push(FileChange {
+        rel: OWNERSHIP_FILE.into(),
+        install: true,
+        expected_hash: registry_hash,
+    });
+    commit_file_changes(work, addons_dir, &staged, &backup, &changes)?;
+    let mut dirs: Vec<_> = dirs.into_iter().collect();
+    dirs.sort_by_key(|dir| std::cmp::Reverse(dir.components().count()));
+    for dir in dirs {
+        let path = addons_dir.join(dir);
+        match std::fs::remove_dir(&path) {
+            Ok(()) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::DirectoryNotEmpty | std::io::ErrorKind::NotFound
+                ) => {}
+            Err(error) => {
+                return Err(anyhow!(
+                    "addon files were removed, but empty directory cleanup failed at {}: {error}",
+                    path.display()
+                ))
+            }
+        }
+    }
+    Ok((
+        owner,
+        roots,
+        UninstallOutcome {
+            preserved_files: target.exists(),
+        },
+    ))
 }
 
 /// One-shot migration for users coming from v0.1.8 / v0.1.9. Those builds
@@ -996,6 +1283,11 @@ mod tests {
         let addons_dir = temp.path().join("AddOns");
         let addon_dir = addons_dir.join("Example");
         std::fs::create_dir_all(&addon_dir)?;
+        extract_zip(
+            &archive(&[("Example/Example.txt", b"manifest")])?,
+            &addons_dir,
+            "1",
+        )?;
         let conn = db::open(&temp.path().join("catalog.db"))?;
         let state = std::sync::Arc::new(AppState {
             db: std::sync::Mutex::new(conn),
@@ -1055,9 +1347,11 @@ mod tests {
             uninstall_addon(&worker_state, "Example").await
         });
         started_rx.await?;
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(50), &mut uninstall)
-            .await
-            .is_err());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut uninstall)
+                .await
+                .is_err()
+        );
         extract_zip(
             &archive(&[("Example/Example.txt", b"first")])?,
             &addons_dir,
@@ -1195,6 +1489,264 @@ mod tests {
             archive.write_all(data)?;
         }
         Ok(archive.finish()?.into_inner())
+    }
+
+    #[test]
+    fn legacy_update_requires_consent_and_preserves_backup() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addons = temp.path().join("AddOns");
+        let backups = temp.path().join("backups");
+        std::fs::create_dir_all(addons.join("Example"))?;
+        std::fs::create_dir_all(addons.join("shared"))?;
+        std::fs::write(addons.join("Example/Example.txt"), b"legacy manifest")?;
+        std::fs::write(addons.join("shared/conflict"), b"legacy file")?;
+        std::fs::write(addons.join("shared/unrelated"), b"other addon")?;
+        let bytes = archive(&[
+            ("Example/Example.addon", b"new manifest"),
+            ("shared/conflict", b"new file"),
+        ])?;
+        let mut declined = |conflicts: &[FileConflict]| {
+            assert_eq!(conflicts.len(), 2);
+            Err(anyhow!("declined"))
+        };
+        assert!(extract_zip_with_resolution(&bytes, &addons, "1", &mut declined).is_err());
+        assert_eq!(
+            std::fs::read(addons.join("Example/Example.txt"))?,
+            b"legacy manifest"
+        );
+        assert!(!addons.join("Example/Example.addon").exists());
+        let mut saved = None;
+        extract_zip_with_resolution(&bytes, &addons, "1", &mut |conflicts| {
+            let backup = backup_conflicts(&addons, &backups, "1", conflicts)?;
+            verify_conflict_backup(&addons, backup.path(), conflicts)?;
+            saved = Some(backup.keep());
+            Ok(())
+        })?;
+        let saved = saved.unwrap();
+        assert_eq!(
+            std::fs::read(saved.join("files/Example/Example.txt"))?,
+            b"legacy manifest"
+        );
+        assert_eq!(
+            std::fs::read(saved.join("files/shared/conflict"))?,
+            b"legacy file"
+        );
+        let list = std::fs::read_to_string(saved.join("conflicts.txt"))?;
+        assert!(list.contains("Remove: Example"));
+        assert!(list.contains("Replace: shared"));
+        assert!(!addons.join("Example/Example.txt").exists());
+        assert_eq!(
+            std::fs::read(addons.join("Example/Example.addon"))?,
+            b"new manifest"
+        );
+        assert_eq!(std::fs::read(addons.join("shared/conflict"))?, b"new file");
+        assert_eq!(
+            std::fs::read(addons.join("shared/unrelated"))?,
+            b"other addon"
+        );
+        uninstall(&addons, "Example")?;
+        assert!(!addons.join("Example/Example.addon").exists());
+        assert!(!addons.join("shared/conflict").exists());
+        assert_eq!(
+            std::fs::read(addons.join("shared/unrelated"))?,
+            b"other addon"
+        );
+        extract_zip(&bytes, &addons, "1")?;
+        assert_eq!(
+            std::fs::read(addons.join("Example/Example.addon"))?,
+            b"new manifest"
+        );
+        assert_eq!(
+            std::fs::read(saved.join("files/Example/Example.txt"))?,
+            b"legacy manifest"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn conflict_backup_and_rollback_preserve_originals_if_files_change() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addons = temp.path().join("AddOns");
+        let backups = temp.path().join("backups");
+        std::fs::create_dir_all(addons.join("Example"))?;
+        std::fs::create_dir_all(addons.join("shared"))?;
+        std::fs::write(addons.join("Example/Example.txt"), b"legacy")?;
+        std::fs::write(addons.join("shared/file"), b"original")?;
+        let bytes = archive(&[
+            ("Example/Example.addon", b"new manifest"),
+            ("shared/file", b"new"),
+        ])?;
+        let mut saved = None;
+        let result = extract_zip_with_resolution(&bytes, &addons, "1", &mut |conflicts| {
+            saved = Some(backup_conflicts(&addons, &backups, "1", conflicts)?.keep());
+            std::fs::write(addons.join("shared/file"), b"external edit")?;
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read(addons.join("Example/Example.txt"))?,
+            b"legacy"
+        );
+        assert!(!addons.join("Example/Example.addon").exists());
+        assert_eq!(std::fs::read(addons.join("shared/file"))?, b"external edit");
+        assert_eq!(
+            std::fs::read(saved.unwrap().join("files/shared/file"))?,
+            b"original"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn known_other_owner_cannot_be_approved() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        extract_zip(
+            &archive(&[("shared/file", b"other")])?,
+            temp.path(),
+            "other",
+        )?;
+        let mut called = false;
+        let result = extract_zip_with_resolution(
+            &archive(&[("shared/file", b"replace")])?,
+            temp.path(),
+            "new",
+            &mut |_| {
+                called = true;
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert!(!called);
+        assert_eq!(std::fs::read(temp.path().join("shared/file"))?, b"other");
+        Ok(())
+    }
+
+    #[test]
+    fn altered_backup_prevents_approval() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addons = temp.path().join("AddOns");
+        std::fs::create_dir_all(addons.join("Example"))?;
+        std::fs::write(addons.join("Example/file"), b"original")?;
+        let result = extract_zip_with_resolution(
+            &archive(&[("Example/file", b"new")])?,
+            &addons,
+            "1",
+            &mut |conflicts| {
+                let backup =
+                    backup_conflicts(&addons, &temp.path().join("backups"), "1", conflicts)?;
+                std::fs::write(backup.path().join("files/Example/file"), b"tampered")?;
+                verify_conflict_backup(&addons, backup.path(), conflicts)
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(addons.join("Example/file"))?, b"original");
+        Ok(())
+    }
+
+    #[test]
+    fn uninstall_removes_only_owned_files_and_allows_reinstall() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addons = temp.path();
+        let first = archive(&[
+            ("Example/Example.txt", b"manifest"),
+            ("Example/owned", b"mine"),
+            ("shared/owned", b"mine"),
+        ])?;
+        extract_zip(&first, addons, "1")?;
+        extract_zip(
+            &archive(&[("Example/other", b"other"), ("shared/other", b"other")])?,
+            addons,
+            "2",
+        )?;
+        std::fs::write(addons.join("Example/manual"), b"manual")?;
+        let (owner, _, result) = uninstall(addons, "Example")?;
+        assert_eq!(owner, "1");
+        assert!(result.preserved_files);
+        assert!(!addons.join("Example/Example.txt").exists());
+        assert!(!addons.join("shared/owned").exists());
+        assert_eq!(std::fs::read(addons.join("Example/other"))?, b"other");
+        assert_eq!(std::fs::read(addons.join("shared/other"))?, b"other");
+        assert_eq!(std::fs::read(addons.join("Example/manual"))?, b"manual");
+        let (registry, _) = load_ownership(addons)?;
+        assert!(registry.files.values().all(|entry| entry.addon_id == "2"));
+        extract_zip(&first, addons, "1")?;
+        assert_eq!(
+            std::fs::read(addons.join("Example/Example.txt"))?,
+            b"manifest"
+        );
+        assert_eq!(std::fs::read(addons.join("Example/manual"))?, b"manual");
+        Ok(())
+    }
+
+    #[test]
+    fn uninstall_refuses_legacy_or_modified_files_without_changes() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addons = temp.path();
+        std::fs::create_dir(addons.join("Legacy"))?;
+        std::fs::write(addons.join("Legacy/Legacy.txt"), b"legacy")?;
+        assert!(uninstall(addons, "Legacy").is_err());
+        assert_eq!(std::fs::read(addons.join("Legacy/Legacy.txt"))?, b"legacy");
+        extract_zip(
+            &archive(&[
+                ("Example/Example.txt", b"manifest"),
+                ("Example/modified", b"original"),
+            ])?,
+            addons,
+            "1",
+        )?;
+        std::fs::write(addons.join("Example/modified"), b"edited")?;
+        assert!(uninstall(addons, "Example").is_err());
+        assert_eq!(
+            std::fs::read(addons.join("Example/Example.txt"))?,
+            b"manifest"
+        );
+        assert_eq!(std::fs::read(addons.join("Example/modified"))?, b"edited");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn uninstall_clears_own_markers_but_preserves_other_pins() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addons = temp.path().join("AddOns");
+        std::fs::create_dir(&addons)?;
+        extract_zip(
+            &archive(&[
+                ("Example/Example.txt", b"manifest"),
+                ("shared/one", b"file"),
+            ])?,
+            &addons,
+            "1",
+        )?;
+        let conn = db::open(&temp.path().join("catalog.db"))?;
+        db::set_metadata(&conn, "installed:1", "123")?;
+        db::set_metadata(&conn, "installed_at:1", "date")?;
+        db::set_metadata(&conn, "installed_dir:Example", "1")?;
+        db::set_metadata(&conn, "installed_dir:shared", "2")?;
+        let state = AppState {
+            db: std::sync::Mutex::new(conn),
+            addons_dir: std::sync::Mutex::new(addons),
+            addon_fs_mutations: tokio::sync::Mutex::new(()),
+            backups_dir: temp.path().join("backups"),
+            mmoui: crate::api::MmouiClient::new(),
+            syncing: AtomicBool::new(false),
+            close_to_tray: AtomicBool::new(false),
+            auto_update_interval_minutes: AtomicU64::new(0),
+        };
+        uninstall_addon(&state, "Example").await?;
+        let conn = state.db.lock().unwrap();
+        assert_eq!(db::get_metadata(&conn, "installed:1").as_deref(), Some(""));
+        assert_eq!(
+            db::get_metadata(&conn, "installed_at:1").as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            db::get_metadata(&conn, "installed_dir:Example").as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            db::get_metadata(&conn, "installed_dir:shared").as_deref(),
+            Some("2")
+        );
+        Ok(())
     }
 
     #[test]

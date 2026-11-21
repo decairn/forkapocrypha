@@ -59,21 +59,33 @@ After the first install, Apocrypha can update itself: open **Settings → App Up
 
 ### Install conflicts and migration
 
-Apocrypha records the owner, filesystem identity, and content hash of each file it installs in
-`AddOns/.apocrypha-ownership.json`. Updates replace or remove only unchanged
-files owned by that addon; a conflicting file owned by another addon, an
-untracked file, or a modified file stops the install. This also applies to an
-old `.txt` or `.addon` manifest: it must be safely removed before the other
-extension is installed so the game cannot load both.
+Apocrypha records each installed file's owner, filesystem identity, and content
+hash in `AddOns/.apocrypha-ownership.json`. Files owned by another addon are
+never overwritten. Manual updates that encounter untracked or modified files
+show a confirmation with the affected paths and a backup location. Review the
+complete `conflicts.txt` at that location before accepting: untracked files can
+belong to another addon, and accepting may affect it. Cancelling leaves the
+files untouched. Background updates never approve conflicts; update manually
+to review them.
 
-Existing manual installs and installs from older versions have no per-file
-ownership record and are not automatically adopted. When an install reports a
-conflict, verify the file's owner, back it up and move it outside AddOns before
-retrying; moving another addon's files can break that addon. Keep the ownership
-registry with your AddOns folder: if it is lost, existing files become
-untracked. Copying files to a different filesystem or recreating them changes
-their identity and requires the same manual conflict resolution. Files not
-previously recorded are not automatically cleaned up.
+Existing manual installs and installs from older versions have no ownership
+record. Confirming a manual update backs up and adopts only conflicting files
+that the new archive replaces, plus an obsolete conflicting manifest if needed;
+other untracked files remain untouched. Backups are retained under Apocrypha's
+`backups/addon-file-conflicts` directory and are not SavedVariables snapshots.
+To recover originals, close ESO and Apocrypha, back up current files, and copy
+the desired originals from the backup's `files` directory to the corresponding
+AddOns paths. If restoring a manifest, remove the newer alternate extension so
+the game cannot load both. This is a backup of conflicting files, not a full
+addon rollback; restored files require conflict resolution on the next update.
+Copying or recreating tracked files also requires conflict resolution.
+
+Uninstall removes only unchanged files recorded as belonging to the selected
+addon, including its owned files in shared roots; other files are preserved.
+Legacy addons without a tracked manifest cannot be uninstalled automatically:
+verify and manage their files manually, or update with the confirmation above
+first. Modified tracked files also block uninstall until resolved.
+
 If an interrupted install or failed rollback leaves a hidden
 `.apocrypha-install-*` directory, recover its `backup` files first, then move
 that directory outside AddOns before retrying. Its `journal.json` lists affected

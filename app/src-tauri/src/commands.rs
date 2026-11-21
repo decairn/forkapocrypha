@@ -301,7 +301,7 @@ pub async fn install_addon(
     addon_id: String,
 ) -> CmdResult<Vec<String>> {
     let _ = app.emit("addon:install:start", &serde_json::json!({ "id": &addon_id }));
-    match installer::install_addon(state.inner(), &app, addon_id.clone()).await {
+    match installer::install_addon(state.inner(), &app, addon_id.clone(), true).await {
         Ok(dirs) => {
             let _ = app.emit(
                 "addon:install:done",
@@ -376,10 +376,10 @@ pub async fn uninstall_addon(
     dir_name: String,
 ) -> CmdResult<()> {
     match installer::uninstall_addon(state.inner(), &dir_name).await {
-        Ok(_) => {
+        Ok(outcome) => {
             let _ = app.emit(
                 "addon:uninstall:done",
-                &serde_json::json!({ "dir_name": &dir_name }),
+                &serde_json::json!({ "dir_name": &dir_name, "preserved_files": outcome.preserved_files }),
             );
             Ok(())
         }

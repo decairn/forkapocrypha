@@ -96,7 +96,7 @@ async fn auto_update_loop(handle: tauri::AppHandle) {
             }
             let state = handle.state::<AppState>();
             if let Err(error) =
-                installer::install_addon(state.inner(), &handle, addon_id.clone()).await
+                installer::install_addon(state.inner(), &handle, addon_id.clone(), false).await
             {
                 eprintln!("auto-update failed for addon {addon_id}: {error:#}");
                 let _ = handle.emit(

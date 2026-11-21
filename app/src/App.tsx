@@ -53,6 +53,26 @@ function App() {
         }),
       );
       unlisteners.push(
+        await listen<{ id: string; path: string }>("addon:install:backup", (e) => {
+          pushToast({
+            tone: "info",
+            title: "Original conflict files backed up",
+            body: e.payload.path,
+          });
+        }),
+      );
+      unlisteners.push(
+        await listen<{ dir_name: string; preserved_files: boolean }>("addon:uninstall:done", (e) => {
+          if (e.payload.preserved_files) {
+            pushToast({
+              tone: "info",
+              title: `Some files remain in ${e.payload.dir_name}`,
+              body: "Files that are untracked or belong to another addon were preserved.",
+            });
+          }
+        }),
+      );
+      unlisteners.push(
         await listen<{ dir_name: string; error: string }>("addon:uninstall:error", (e) => {
           pushToast({
             tone: "error",
