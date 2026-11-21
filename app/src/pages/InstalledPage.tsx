@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   ArrowUpCircle,
+  Check,
+  CircleMinus,
+  Library,
+  ListFilter,
   Loader2,
   RefreshCw,
   AlertTriangle,
@@ -10,8 +14,11 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { InstalledRow } from "@/components/InstalledRow";
 import { AddonDetailPanel } from "@/components/AddonDetailPanel";
+import { SearchSelect } from "@/components/SearchSelect";
 import { api } from "@/lib/api";
 import type { Addon, InstalledAddon } from "@/lib/types";
+
+type InstalledStatus = "all" | "up-to-date" | "update-available" | "orphan" | "unused-library";
 
 export function InstalledPage({ onInstall, onUninstall }: {
   onInstall: (addonId: string) => Promise<string[]>;
@@ -24,6 +31,7 @@ export function InstalledPage({ onInstall, onUninstall }: {
   const [updatingCatalogIds, setUpdatingCatalogIds] = useState<Set<string>>(new Set());
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
   const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<InstalledStatus>("all");
 
   const [selectedCatalogAddon, setSelectedCatalogAddon] = useState<Addon | null>(null);
   const [selectedInstalled, setSelectedInstalled] = useState<InstalledAddon | null>(null);
@@ -160,14 +168,12 @@ export function InstalledPage({ onInstall, onUninstall }: {
   const filteredAddons = useMemo(() => {
     if (!addons) return null;
     const q = query.trim().toLowerCase();
-    if (!q) return addons;
     return addons.filter((a) => {
-      const title = a.title.toLowerCase();
-      const dir = a.dir_name.toLowerCase();
-      const author = (a.author ?? "").toLowerCase();
-      return title.includes(q) || dir.includes(q) || author.includes(q);
+      const rowStatus = a.update_available ? "update-available" : a.catalog_id ? "up-to-date" : "orphan";
+      const matchesStatus = status === "unused-library" ? a.unused_lib : status === "all" || status === rowStatus;
+      return matchesStatus && (!q || [a.title, a.dir_name, a.author].some((value) => value?.toLowerCase().includes(q)));
     });
-  }, [addons, query]);
+  }, [addons, query, status]);
 
   const handleUpdateAll = useCallback(async () => {
     if (!addons) return;
@@ -217,17 +223,24 @@ export function InstalledPage({ onInstall, onUninstall }: {
         <PageHeader
           title="Installed"
           subtitle={
-            addons
-              ? `${addons.length} addon${addons.length === 1 ? "" : "s"} in your library${
-                  updatesAvailable > 0
-                    ? ` · ${updatesAvailable} update${updatesAvailable === 1 ? "" : "s"} available`
-                    : ""
-                }${
-                  unusedLibs > 0
-                    ? ` · ${unusedLibs} unused librar${unusedLibs === 1 ? "y" : "ies"}`
-                    : ""
-                }`
-              : "Your library, updates, and dependency health."
+            addons ? (
+              <>
+                {addons.length} {addons.length === 1 ? "addon" : "addons"} in your library
+                {updatesAvailable > 0 && ` · ${updatesAvailable} ${updatesAvailable === 1 ? "update" : "updates"} available`}
+                {unusedLibs > 0 && (
+                  <>
+                    {" · "}
+                    <button
+                      type="button"
+                      onClick={() => setStatus("unused-library")}
+                      className="rounded-sm text-primary underline underline-offset-4 hover:text-on-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    >
+                      {unusedLibs} {unusedLibs === 1 ? "unused library" : "unused libraries"}
+                    </button>
+                  </>
+                )}
+              </>
+            ) : "Your library, updates, and dependency health."
           }
           actions={
             <>
@@ -268,8 +281,8 @@ export function InstalledPage({ onInstall, onUninstall }: {
         />
 
         {addons && addons.length > 0 ? (
-          <div className="px-10 pb-6 pt-8">
-            <div className="relative">
+          <div className="flex flex-wrap items-center gap-3 px-10 pb-6 pt-8">
+            <div className="relative min-w-0 flex-[1_1_12rem]">
               <SearchIcon className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[var(--color-outline)]" />
               <input
                 type="text"
@@ -279,6 +292,19 @@ export function InstalledPage({ onInstall, onUninstall }: {
                 className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-lowest)] py-3.5 pl-12 pr-4 text-base text-[var(--color-on-surface)] placeholder:text-[var(--color-outline)] focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
               />
             </div>
+            <SearchSelect<InstalledStatus>
+              label="Addon status"
+              value={status}
+              onChange={setStatus}
+              widthClass="w-48 max-w-full"
+              options={[
+                { key: "all", label: "All statuses", icon: ListFilter },
+                { key: "up-to-date", label: "Up to date", icon: Check },
+                { key: "update-available", label: "Update available", icon: ArrowUpCircle },
+                { key: "orphan", label: "Orphan", icon: CircleMinus },
+                { key: "unused-library", label: "Unused libraries", icon: Library },
+              ]}
+            />
           </div>
         ) : null}
 
@@ -301,8 +327,8 @@ export function InstalledPage({ onInstall, onUninstall }: {
             />
           ) : filteredAddons && filteredAddons.length === 0 ? (
             <EmptyState
-              title="No matches."
-              subtitle={`Nothing in your library matches "${query}". Clear the filter to see all ${addons?.length ?? 0} addons.`}
+              title={status === "unused-library" && unusedLibs === 0 ? "No unused libraries." : "No matching addons."}
+              subtitle={query.trim() ? "Try a different search term or status." : undefined}
             />
           ) : (
             <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-lowest)]">
@@ -330,6 +356,7 @@ export function InstalledPage({ onInstall, onUninstall }: {
           action={panelAction}
           installedDirName={currentSelectedInstalled.dir_name}
           installedAt={currentSelectedInstalled.installed_at}
+          unusedLibrary={currentSelectedInstalled.unused_lib}
           onClose={closePanel}
           onUpdate={() => handleUpdate(currentSelectedInstalled)}
           onUninstall={() => handleUninstall(currentSelectedInstalled)}

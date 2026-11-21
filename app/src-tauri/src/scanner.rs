@@ -64,6 +64,9 @@ pub fn scan(addons_dir: &Path) -> Result<Vec<InstalledAddon>> {
         }
         let dir_path = entry.path();
         let manifest = locate_manifest(&dir_path, &dir_name);
+        if manifest.is_none() && !has_remaining_entries(&dir_path) {
+            continue;
+        }
         let mut addon = match manifest {
             Some(p) => parse_manifest(&p, &dir_name).unwrap_or_else(|_| empty(&dir_name)),
             None => empty(&dir_name),
@@ -73,6 +76,26 @@ pub fn scan(addons_dir: &Path) -> Result<Vec<InstalledAddon>> {
     }
     out.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
     Ok(out)
+}
+
+// Keep unreadable directories and links visible, since they may contain user data.
+pub(crate) fn has_remaining_entries(dir: &Path) -> bool {
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return true,
+        };
+        for entry in entries {
+            let Ok(entry) = entry else { return true };
+            match entry.file_type() {
+                Ok(ty) if ty.is_dir() => pending.push(entry.path()),
+                _ => return true,
+            }
+        }
+    }
+    false
 }
 
 pub(crate) fn locate_manifest(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -227,5 +250,18 @@ mod tests {
     #[test]
     fn preserves_incomplete_and_invalid_color_codes() {
         assert_eq!(strip_color_codes("|c12345é |C123"), "|c12345é |C123");
+    }
+
+    #[test]
+    fn skips_empty_directory_trees_but_lists_leftover_files() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        std::fs::create_dir_all(dir.path().join("LibRemoved/datastructures/test"))?;
+        std::fs::create_dir_all(dir.path().join("LibPartial/nested"))?;
+        std::fs::write(dir.path().join("LibPartial/nested/settings.lua"), b"settings")?;
+
+        let installed = scan(dir.path())?;
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].dir_name, "LibPartial");
+        Ok(())
     }
 }

@@ -32,6 +32,7 @@ interface AddonDetailPanelProps {
   action: ActionState;
   installedDirName?: string | null;
   installedAt?: string | null;
+  unusedLibrary?: boolean;
   onClose: () => void;
   onInstall?: () => void;
   onUpdate?: () => void;
@@ -209,11 +210,13 @@ function HeroImage({ addon, onExpand }: { addon: Addon; onExpand: () => void }) 
 
 function ActionButton({
   action,
+  uninstallLabel = "Uninstall",
   onInstall,
   onUpdate,
   onUninstall,
 }: {
   action: ActionState;
+  uninstallLabel?: string;
   onInstall?: () => void;
   onUpdate?: () => void;
   onUninstall?: () => void;
@@ -276,7 +279,7 @@ function ActionButton({
           className={`${base} flex-1 border-[var(--color-border)] bg-[var(--color-surface-low)] text-[var(--color-on-surface-variant)] hover:border-[var(--color-error)] hover:text-[var(--color-error)]`}
         >
           <Trash2 className="h-4 w-4" strokeWidth={1.75} />
-          Uninstall
+          {uninstallLabel}
         </button>
       );
     case "uninstalling":
@@ -343,6 +346,7 @@ export function AddonDetailPanel({
   action,
   installedDirName,
   installedAt,
+  unusedLibrary,
   onClose,
   onInstall,
   onUpdate,
@@ -454,13 +458,17 @@ export function AddonDetailPanel({
             ) : null}
           </div>
 
-          <div className="flex gap-2 px-6 pb-1 pt-4">
+          <div className="flex flex-wrap gap-2 px-6 pb-1 pt-4">
             <ActionButton
               action={action}
+              uninstallLabel={unusedLibrary ? "Remove" : undefined}
               onInstall={onInstall}
               onUpdate={onUpdate}
               onUninstall={onUninstall}
             />
+            {unusedLibrary && action.kind === "update" ? (
+              <ActionButton action={{ kind: "uninstall" }} uninstallLabel="Remove" onUninstall={onUninstall} />
+            ) : null}
           </div>
 
           <div className="grid grid-cols-3 gap-2 px-6 pb-2 pt-4 text-xs text-[var(--color-on-surface-variant)]">

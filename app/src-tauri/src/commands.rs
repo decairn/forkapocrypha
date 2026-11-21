@@ -450,7 +450,8 @@ fn report_uninstall(
                 &serde_json::json!({
                     "dir_name": dir_name,
                     "preserved_files": outcome.preserved_files,
-                    "backup_path": outcome.backup_path.map(|path| path.to_string_lossy().into_owned())
+                    "backup_path": outcome.backup_path.map(|path| path.to_string_lossy().into_owned()),
+                    "directory_cleanup_warning": outcome.directory_cleanup_warning,
                 }),
             );
             Ok(())

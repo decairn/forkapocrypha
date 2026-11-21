@@ -60,6 +60,10 @@ function App() {
           return false;
         }
       }
+      if (preview.files.length === 0) {
+        pushToast({ tone: "info", title: `No removable files in ${dirName}` });
+        return false;
+      }
       return await new Promise<boolean>((resolve) => setUninstallReview({ dirName, preview, resolve }));
     } finally {
       uninstallPending.current = false;
@@ -123,7 +127,12 @@ function App() {
         }),
       );
       unlisteners.push(
-        await listen<{ dir_name: string; preserved_files: boolean; backup_path: string | null }>("addon:uninstall:done", (e) => {
+        await listen<{
+          dir_name: string;
+          preserved_files: boolean;
+          backup_path: string | null;
+          directory_cleanup_warning: string | null;
+        }>("addon:uninstall:done", (e) => {
           if (e.payload.backup_path) {
             pushToast({
               tone: "info",
@@ -136,6 +145,13 @@ function App() {
               tone: "info",
               title: `Some files remain in ${e.payload.dir_name}`,
               body: "Files that are untracked or belong to another addon were preserved.",
+            });
+          }
+          if (e.payload.directory_cleanup_warning) {
+            pushToast({
+              tone: "info",
+              title: "Addon files removed. A folder could not be cleaned up.",
+              body: e.payload.directory_cleanup_warning,
             });
           }
         }),
