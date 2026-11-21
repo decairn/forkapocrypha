@@ -53,6 +53,26 @@ function App() {
   }, [pushToast]);
 
   useEffect(() => {
+    const subscription = listen<{ id: string; error: string; addon_title?: string }>(
+      "addon:install:error",
+      ({ payload }) => {
+        pushToast({
+          tone: "error",
+          title: payload.addon_title
+            ? `Auto-update failed for ${payload.addon_title}`
+            : "Install failed",
+          body: payload.error,
+        });
+      },
+    );
+
+    return () => {
+      // The listener may finish registering after cleanup has started.
+      void subscription.then((unlisten) => unlisten());
+    };
+  }, [pushToast]);
+
+  useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
     let doneTimer: ReturnType<typeof setTimeout> | undefined;
     let errorTimer: ReturnType<typeof setTimeout> | undefined;
@@ -79,15 +99,6 @@ function App() {
         }),
       );
 
-      unlisteners.push(
-        await listen<{ id: string; error: string }>("addon:install:error", (e) => {
-          pushToast({
-            tone: "error",
-            title: "Install failed",
-            body: e.payload.error,
-          });
-        }),
-      );
       unlisteners.push(
         await listen<{ id: string; path: string }>("addon:install:backup", (e) => {
           pushToast({
