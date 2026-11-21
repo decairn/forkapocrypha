@@ -43,7 +43,9 @@ export type BlockNode =
 // SOH control char: not a Unicode whitespace, so it survives String.trim()
 // inside the paragraph split below. A plain space here would be eaten by
 // trim() and the placeholders would leak to the renderer as literal text.
-const SENTINEL = "";
+const SENTINEL = "\x01";
+const CODE_PLACEHOLDER = new RegExp(`^${SENTINEL}CODE(\\d+)${SENTINEL}$`);
+const LIST_PLACEHOLDER = new RegExp(`^${SENTINEL}LIST(\\d+)${SENTINEL}$`);
 
 // Section names that always read as primary (level-2) headings in ESOUI
 // descriptions. Keep lowercase, matched case-insensitively, trimmed.
@@ -176,15 +178,15 @@ function classifyParagraph(
   // off and keep classifying the remainder (which itself may be a list or
   // another heading + body).
   while (current.length > 0) {
-    // Placeholders for the side tables. SENTINEL is , which survives
+    // Placeholders for the side tables. SENTINEL is SOH, which survives
     // String.trim(), so the placeholder arrives intact.
-    const codeMatch = current.match(/^CODE(\d+)$/);
+    const codeMatch = current.match(CODE_PLACEHOLDER);
     if (codeMatch) {
       const body = codeBlocks[Number(codeMatch[1])].replace(/^\n+|\n+$/g, "");
       if (body) out.push({ type: "code", text: body });
       return;
     }
-    const listMatch = current.match(/^LIST(\d+)$/);
+    const listMatch = current.match(LIST_PLACEHOLDER);
     if (listMatch) {
       const items = listBlocks[Number(listMatch[1])].map(parseInline);
       if (items.length) out.push({ type: "list", items });
@@ -255,7 +257,7 @@ function classifyParagraph(
     }
 
     // Single-version changelog line: "version 3.2.1 - someone" or "v106".
-    if (lines.length === 1 && /^v(?:ersion)?\s*[\w.\-]+(?:\s*[-–—]\s*.+)?$/i.test(firstLine)) {
+    if (lines.length === 1 && /^v(?:ersion)?\s*[\w.-]+(?:\s*[-–—]\s*.+)?$/i.test(firstLine)) {
       out.push({
         type: "heading",
         level: 3,
