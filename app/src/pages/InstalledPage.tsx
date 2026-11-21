@@ -69,6 +69,7 @@ export function InstalledPage() {
             return next;
           });
           console.error("install/update failed:", e.payload.error);
+          reload();
         }),
       );
       unlisteners.push(

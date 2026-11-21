@@ -7,7 +7,15 @@ use std::path::{Component, Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 
 use crate::db;
+use crate::scanner;
 use crate::state::AppState;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Dependency {
+    name: String,
+    min_version: Option<u32>,
+    required_by: String,
+}
 
 #[derive(Serialize, Clone)]
 struct InstallProgress<'a> {
@@ -22,7 +30,24 @@ pub async fn install_addon(
 ) -> Result<Vec<String>> {
     let mut visited: HashSet<String> = HashSet::new();
     let mut installed_dirs: Vec<String> = Vec::new();
-    install_one(state, app, addon_id, &mut visited, &mut installed_dirs).await?;
+    let mut dependencies = Vec::new();
+    let addons_dir = state.addons_dir.lock().unwrap().clone();
+    let result = async {
+        install_one(
+            state,
+            app,
+            addon_id,
+            &addons_dir,
+            &mut visited,
+            &mut installed_dirs,
+            &mut dependencies,
+        )
+        .await?;
+        validate_dependencies(&addons_dir, &dependencies)?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    result.map_err(|error| anyhow!("Installation may be incomplete: {error:#}"))?;
     Ok(installed_dirs)
 }
 
@@ -30,8 +55,10 @@ async fn install_one(
     state: &AppState,
     app: &AppHandle,
     addon_id: String,
+    addons_dir: &Path,
     visited: &mut HashSet<String>,
     installed_dirs: &mut Vec<String>,
+    dependencies: &mut Vec<Dependency>,
 ) -> Result<()> {
     if !visited.insert(addon_id.clone()) {
         return Ok(());
@@ -69,9 +96,8 @@ async fn install_one(
         },
     );
 
-    let addons_dir = state.addons_dir.lock().unwrap().clone();
-    std::fs::create_dir_all(&addons_dir)?;
-    let extracted = extract_zip(&bytes, &addons_dir)?;
+    std::fs::create_dir_all(addons_dir)?;
+    let extracted = extract_zip(&bytes, addons_dir)?;
     for d in &extracted {
         if !installed_dirs.contains(d) {
             installed_dirs.push(d.clone());
@@ -114,20 +140,34 @@ async fn install_one(
         }
     }
 
-    let deps = collect_dependencies(&addons_dir, &extracted)?;
-    for dep_dir in deps {
-        let dep_path = addons_dir.join(&dep_dir);
-        if dep_path.exists() {
+    let deps = collect_dependencies(addons_dir, &extracted)?;
+    for dep in deps {
+        dependencies.push(dep.clone());
+        if find_dependency_dir(addons_dir, &dep.name)?.is_some() {
             continue;
         }
         let dep_id = {
             let conn = state.db.lock().unwrap();
-            db::find_by_directory(&conn, &dep_dir)?.map(|a| a.id)
+            db::find_by_directory(&conn, &dep.name)?.map(|a| a.id)
         };
         if let Some(id) = dep_id {
-            Box::pin(install_one(state, app, id, visited, installed_dirs)).await?;
+            Box::pin(install_one(
+                state,
+                app,
+                id,
+                addons_dir,
+                visited,
+                installed_dirs,
+                dependencies,
+            ))
+            .await?;
+        } else if let Some(min_version) = dep.min_version {
+            return Err(anyhow!(
+                "{} requires {} >= {}, but it is not installed or in the catalog",
+                dep.required_by, dep.name, min_version
+            ));
         } else {
-            eprintln!("dependency '{}' not in catalog — skipping", dep_dir);
+            eprintln!("dependency '{}' not in catalog — skipping", dep.name);
         }
     }
 
@@ -225,25 +265,15 @@ fn extract_zip(bytes: &[u8], addons_dir: &Path) -> Result<Vec<String>> {
     Ok(root_dirs.into_iter().collect())
 }
 
-fn collect_dependencies(addons_dir: &Path, dirs: &[String]) -> Result<Vec<String>> {
-    use std::collections::HashSet as Set;
-    let mut deps: Set<String> = Set::new();
+fn collect_dependencies(addons_dir: &Path, dirs: &[String]) -> Result<Vec<Dependency>> {
+    let mut deps = HashSet::new();
 
     for dir in dirs {
-        let manifest_txt = addons_dir.join(dir).join(format!("{}.txt", dir));
-        let manifest_addon = addons_dir.join(dir).join(format!("{}.addon", dir));
-        let path = if manifest_txt.exists() {
-            manifest_txt
-        } else if manifest_addon.exists() {
-            manifest_addon
-        } else {
+        let Some(path) = scanner::locate_manifest(&addons_dir.join(dir), dir) else {
             continue;
         };
 
-        let content = match std::fs::read(&path) {
-            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-            Err(_) => continue,
-        };
+        let content = scanner::read_lossy(&path)?;
 
         for raw_line in content.lines() {
             let line = raw_line.trim();
@@ -255,18 +285,108 @@ fn collect_dependencies(addons_dir: &Path, dirs: &[String]) -> Result<Vec<String
             }
             let value = line.split_once(':').map(|(_, v)| v.trim()).unwrap_or("");
             for tok in value.split_whitespace() {
-                let clean = tok
-                    .split(|c: char| c == '>' || c == '<' || c == '=')
-                    .next()
-                    .unwrap_or(tok)
-                    .trim();
-                if !clean.is_empty() {
-                    deps.insert(clean.to_string());
+                let (name, min_version) = match tok.find(['>', '<', '=']) {
+                    Some(index) => {
+                        let (name, constraint) = tok.split_at(index);
+                        let version = constraint
+                            .strip_prefix(">=")
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .ok_or_else(|| {
+                                anyhow!("{} has an unsupported dependency constraint '{}'", dir, tok)
+                            })?;
+                        (name, Some(version))
+                    }
+                    None => (tok, None),
+                };
+                if name.is_empty()
+                    || name.contains(['/', '\\'])
+                    || name == "."
+                    || name == ".."
+                    || name.contains(':')
+                {
+                    return Err(anyhow!(
+                        "{} has an invalid dependency name '{}'",
+                        dir,
+                        name
+                    ));
                 }
+                deps.insert(Dependency {
+                    name: name.to_string(),
+                    min_version,
+                    required_by: dir.clone(),
+                });
             }
         }
     }
     Ok(deps.into_iter().collect())
+}
+
+fn find_dependency_dir(addons_dir: &Path, name: &str) -> Result<Option<String>> {
+    let mut matched = None;
+    for entry in std::fs::read_dir(addons_dir)? {
+        let entry = entry?;
+        let dir = entry.file_name().to_string_lossy().into_owned();
+        if !dir.eq_ignore_ascii_case(name) {
+            continue;
+        }
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() || (file_type.is_symlink() && entry.path().metadata()?.is_dir()) {
+            if matched.is_some() {
+                return Err(anyhow!(
+                    "multiple installed directories match dependency '{}'",
+                    name
+                ));
+            }
+            matched = Some(dir);
+        }
+    }
+    Ok(matched)
+}
+
+fn validate_dependencies(addons_dir: &Path, dependencies: &[Dependency]) -> Result<()> {
+    for dependency in dependencies {
+        validate_dependency_version(addons_dir, dependency)?;
+    }
+    Ok(())
+}
+
+fn validate_dependency_version(addons_dir: &Path, dep: &Dependency) -> Result<()> {
+    let Some(min_version) = dep.min_version else {
+        return Ok(());
+    };
+    let dir = find_dependency_dir(addons_dir, &dep.name)?.ok_or_else(|| {
+        anyhow!(
+            "{} requires {} >= {}, but it is not installed",
+            dep.required_by, dep.name, min_version
+        )
+    })?;
+    let manifest = scanner::locate_manifest(&addons_dir.join(&dir), &dir)
+        .ok_or_else(|| {
+            anyhow!(
+                "{} requires {} >= {}, but its manifest was not found",
+                dep.required_by, dep.name, min_version
+            )
+        })?;
+    let content = scanner::read_lossy(&manifest)?;
+    let version = content.lines().find_map(|line| {
+        let (key, value) = line.trim().strip_prefix("##")?.split_once(':')?;
+        (key.trim() == "AddOnVersion").then(|| value.trim())
+    });
+    let installed = version
+        .and_then(|v| v.parse::<u32>().ok())
+        .ok_or_else(|| {
+            anyhow!(
+                "{} requires {} >= {}, but its manifest has no valid AddOnVersion",
+                dep.required_by, dep.name, min_version
+            )
+        })?;
+    if installed < min_version {
+        return Err(anyhow!(
+            "{} requires {} >= {}, but AddOnVersion {} is installed; update the dependency",
+            dep.required_by, dep.name, min_version, installed
+        ));
+    }
+    Ok(())
 }
 
 /// Clear the install markers we wrote during the most recent install of this
@@ -398,6 +518,110 @@ mod tests {
     use super::*;
     use std::io::Write;
     use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn collects_all_required_minimum_versions() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addon = temp.path().join("Example");
+        std::fs::create_dir_all(&addon)?;
+        std::fs::write(
+            addon.join("Example.addon"),
+            "## DependsOn: LibA>=2 LibB\n## PCDependsOn: LibA>=10\n\
+             ## Dependencies: LibC>=3\n## OptionalDependsOn: LibD>=100\n",
+        )?;
+        let deps = collect_dependencies(temp.path(), &["Example".into()])?;
+        for (name, version) in [
+            ("LibA", Some(2)),
+            ("LibA", Some(10)),
+            ("LibB", None),
+            ("LibC", Some(3)),
+        ] {
+            assert!(deps.contains(&Dependency {
+                name: name.into(),
+                min_version: version,
+                required_by: "Example".into(),
+            }));
+        }
+        assert_eq!(deps.len(), 4);
+
+        std::fs::write(addon.join("Example.addon"), "## DependsOn: LibA>=abc")?;
+        assert!(collect_dependencies(temp.path(), &["Example".into()])
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported dependency constraint"));
+        Ok(())
+    }
+
+    #[test]
+    fn checks_installed_addon_version_not_display_version() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let lib = temp.path().join("LibExample");
+        std::fs::create_dir_all(&lib)?;
+        let manifest = lib.join("LibExample.txt");
+        let dep = Dependency {
+            name: "libexample".into(),
+            min_version: Some(10),
+            required_by: "Example".into(),
+        };
+        std::fs::write(&manifest, "## Version: 99.0\n## AddOnVersion: 9\n")?;
+        let err = validate_dependency_version(temp.path(), &dep)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Example requires libexample >= 10"));
+        assert!(err.contains("AddOnVersion 9"));
+
+        std::fs::write(&manifest, "## Version: 1.0\n## AddOnVersion: 10\n")?;
+        validate_dependency_version(temp.path(), &dep)?;
+        std::fs::write(&manifest, "## AddOnVersion: 11\n")?;
+        validate_dependency_version(temp.path(), &dep)?;
+
+        for content in ["## Version: 99.0\n", "## AddOnVersion: invalid\n"] {
+            std::fs::write(&manifest, content)?;
+            assert!(validate_dependency_version(temp.path(), &dep)
+                .unwrap_err()
+                .to_string()
+                .contains("no valid AddOnVersion"));
+        }
+        std::fs::remove_file(&manifest)?;
+        assert!(validate_dependency_version(temp.path(), &dep)
+            .unwrap_err()
+            .to_string()
+            .contains("manifest was not found"));
+        std::fs::remove_dir(&lib)?;
+        assert!(validate_dependency_version(temp.path(), &dep)
+            .unwrap_err()
+            .to_string()
+            .contains("not installed"));
+        Ok(())
+    }
+
+    #[test]
+    fn validates_all_collected_requirements_after_installation() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        for dir in ["Example", "Other", "LibExample"] {
+            std::fs::create_dir_all(temp.path().join(dir))?;
+        }
+        std::fs::write(
+            temp.path().join("Example").join("Example.txt"),
+            "## DependsOn: LibExample>=2\n## OptionalDependsOn: Missing>=99",
+        )?;
+        std::fs::write(
+            temp.path().join("Other").join("Other.addon"),
+            "## PCDependsOn: LibExample>=10",
+        )?;
+        let lib_manifest = temp.path().join("LibExample").join("LibExample.txt");
+        std::fs::write(&lib_manifest, "## AddOnVersion: 10")?;
+        let dependencies =
+            collect_dependencies(temp.path(), &["Example".into(), "Other".into()])?;
+        validate_dependencies(temp.path(), &dependencies)?;
+
+        std::fs::write(&lib_manifest, "## AddOnVersion: 9")?;
+        let error = validate_dependencies(temp.path(), &dependencies)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Other requires LibExample >= 10"));
+        Ok(())
+    }
 
     #[test]
     fn extraction_replaces_old_files_and_rejects_traversal() -> Result<()> {

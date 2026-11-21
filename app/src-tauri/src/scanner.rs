@@ -75,7 +75,7 @@ pub fn scan(addons_dir: &Path) -> Result<Vec<InstalledAddon>> {
     Ok(out)
 }
 
-fn locate_manifest(dir: &Path, name: &str) -> Option<PathBuf> {
+pub(crate) fn locate_manifest(dir: &Path, name: &str) -> Option<PathBuf> {
     let txt = dir.join(format!("{}.txt", name));
     if txt.exists() {
         return Some(txt);
@@ -160,7 +160,7 @@ fn parse_manifest(path: &Path, fallback_name: &str) -> Result<InstalledAddon> {
     })
 }
 
-fn read_lossy(path: &Path) -> Result<String> {
+pub(crate) fn read_lossy(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path)?;
     Ok(String::from_utf8_lossy(&bytes).to_string())
 }

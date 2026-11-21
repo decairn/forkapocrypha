@@ -78,11 +78,15 @@ async fn auto_update_loop(handle: tauri::AppHandle) {
                 break;
             }
             let state = handle.state::<AppState>();
-            // install_addon command emits its own events; reuse it directly via the
-            // installer module so we don't have to call through Tauri.
-            let _ = installer::install_addon(state.inner(), &handle, addon_id.clone()).await;
-            // We don't surface errors per-addon; addon:install:error events already cover that.
-            let _ = addon_id; // silence unused warning if break early
+            if let Err(error) =
+                installer::install_addon(state.inner(), &handle, addon_id.clone()).await
+            {
+                eprintln!("auto-update failed for addon {addon_id}: {error:#}");
+                let _ = handle.emit(
+                    "addon:install:error",
+                    &serde_json::json!({ "id": &addon_id, "error": error.to_string() }),
+                );
+            }
         }
     }
 }

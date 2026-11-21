@@ -48,6 +48,7 @@ After the first install, Apocrypha can update itself: open **Settings → App Up
 
 - **Browse the full ESOUI catalog** (~6,000 addons) with live search, sort, category filter, and pagination
 - **One-click install** with **recursive dependency resolution** — LibStub, LibAddonMenu-2.0, LibCustomMenu, LibAsync and friends are pulled in automatically without asking
+- Required dependency minimums are checked against the installed manifest's `AddOnVersion`. If a dependency is too old or its version cannot be verified, installation reports an error and may be partial; update the dependency and retry.
 - **Update, uninstall, and bulk Update All** — re-uses the same install pipeline, with a pre-clean step that handles manifest renames (`.txt` → `.addon`) cleanly
 - **Background auto-update** of addons while ESO is closed (off by default; toggle in Settings)
 - **SavedVariables snapshots** — back up your configs before a risky update, restore in one click
