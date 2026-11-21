@@ -399,6 +399,7 @@ pub fn uninstall_addon(
     };
 
     let addons_dir = state.addons_dir.lock().unwrap().clone();
+    let _lock = state.addon_files_lock.lock().unwrap();
     match installer::uninstall(&addons_dir, &dir_name) {
         Ok(_) => {
             if let Some(id) = &catalog_id {

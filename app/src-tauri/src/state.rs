@@ -15,6 +15,7 @@ use crate::scanner;
 pub struct AppState {
     pub db: Mutex<Connection>,
     pub addons_dir: Mutex<PathBuf>,
+    pub addon_files_lock: Mutex<()>,
     pub backups_dir: PathBuf,
     pub mmoui: MmouiClient,
     pub syncing: AtomicBool,
@@ -49,6 +50,7 @@ impl AppState {
         Ok(Self {
             db: Mutex::new(conn),
             addons_dir: Mutex::new(addons_dir),
+            addon_files_lock: Mutex::new(()),
             backups_dir,
             mmoui: MmouiClient::new(),
             syncing: AtomicBool::new(false),

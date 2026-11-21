@@ -49,7 +49,7 @@ After the first install, Apocrypha can update itself: open **Settings → App Up
 - **Browse the full ESOUI catalog** (~6,000 addons) with live search, sort, category filter, and pagination
 - **One-click install** with **recursive dependency resolution** — LibStub, LibAddonMenu-2.0, LibCustomMenu, LibAsync and friends are pulled in automatically without asking
 - Required dependency minimums are checked against the installed manifest's `AddOnVersion`. If a dependency is too old or its version cannot be verified, installation reports an error and may be partial; update the dependency and retry.
-- **Update, uninstall, and bulk Update All** — re-uses the same install pipeline, with a pre-clean step that handles manifest renames (`.txt` → `.addon`) cleanly
+- **Update, uninstall, and bulk Update All** — re-uses the same staged install pipeline, including manifest renames (`.txt` → `.addon`)
 - **Background auto-update** of addons while ESO is closed (off by default; toggle in Settings)
 - **SavedVariables snapshots** — back up your configs before a risky update, restore in one click
 - **System tray + autostart** — close to tray, launch with Windows, catalog stays warm
@@ -67,7 +67,7 @@ A few things Apocrypha tries to do well:
 
 - **Native and small** — a Rust + Tauri binary around ~10 MB, cold start in well under a second.
 - **Background-friendly** — lives in the system tray, can auto-update addons while ESO is closed, skips work while the game is running.
-- **Safer updates** — SavedVariables snapshots before risky updates, pre-clean step that handles manifest rename quirks.
+- **Safer updates** — SavedVariables snapshots before risky updates; archive staging and rollback protect existing files, including files in shared directories.
 - **Open source** — the source is right here, no telemetry, no accounts.
 
 ---
