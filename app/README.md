@@ -25,6 +25,9 @@ fast.
 npm run tauri build
 ```
 
+CI uses `src-tauri/tauri.ci.conf.json` to build unsigned installers without
+updater artifacts. Release builds use the default signing configuration.
+
 Outputs:
 
 - Windows: `src-tauri/target/release/bundle/msi/*.msi` and
