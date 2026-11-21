@@ -182,25 +182,50 @@ fn parse_dep_list(value: &str) -> Vec<String> {
 
 fn strip_color_codes(s: &str) -> String {
     // ESO color codes look like |cRRGGBB ... |r
-    let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if i + 1 < bytes.len() && bytes[i] == b'|' && (bytes[i + 1] == b'c' || bytes[i + 1] == b'C')
-        {
-            i += 2 + 6; // skip "|c" and 6 hex digits
-            if i > bytes.len() {
-                break;
+    let mut remaining = s;
+    while let Some(ch) = remaining.chars().next() {
+        let bytes_consumed = match remaining.as_bytes() {
+            [b'|', b'c' | b'C', digits @ ..]
+                if digits
+                    .get(..6)
+                    .is_some_and(|rgb| rgb.iter().all(u8::is_ascii_hexdigit)) =>
+            {
+                8
             }
-            continue;
-        }
-        if i + 1 < bytes.len() && bytes[i] == b'|' && (bytes[i + 1] == b'r' || bytes[i + 1] == b'R')
-        {
-            i += 2;
-            continue;
-        }
-        out.push(bytes[i] as char);
-        i += 1;
+            [b'|', b'r' | b'R', ..] => 2,
+            _ => {
+                out.push(ch);
+                ch.len_utf8()
+            }
+        };
+        remaining = &remaining[bytes_consumed..];
     }
     out.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_non_ascii_manifest_text() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let manifest = dir.path().join("Example.addon");
+        std::fs::write(
+            &manifest,
+            "## Title: Café\n## Author: |cFF8800Renée|r\n## Description: 日|C11aabb本語|R 🌿\n",
+        )?;
+
+        let addon = parse_manifest(&manifest, "Example")?;
+        assert_eq!(addon.title, "Café");
+        assert_eq!(addon.author.as_deref(), Some("Renée"));
+        assert_eq!(addon.description.as_deref(), Some("日本語 🌿"));
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_incomplete_and_invalid_color_codes() {
+        assert_eq!(strip_color_codes("|c12345é |C123"), "|c12345é |C123");
+    }
 }
