@@ -23,6 +23,7 @@ pub async fn enumerate_installed(state: &AppState) -> anyhow::Result<Vec<Install
         last_updated: i64,
         category_id: Option<String>,
         thumbnail_url: Option<String>,
+        legacy_installed_version: Option<String>,
     }
     let mut catalog_map: HashMap<String, CatalogMatch> = HashMap::new();
     let mut install_markers: HashMap<String, i64> = HashMap::new();
@@ -108,6 +109,10 @@ pub async fn enumerate_installed(state: &AppState) -> anyhow::Result<Vec<Install
                 catalog_map.insert(
                     a.dir_name.clone(),
                     CatalogMatch {
+                        legacy_installed_version: db::get_metadata(
+                            &conn,
+                            &format!("installed_version:{}", addon.id),
+                        ),
                         id: addon.id,
                         version: addon.version,
                         last_updated: addon.last_updated,
@@ -119,6 +124,7 @@ pub async fn enumerate_installed(state: &AppState) -> anyhow::Result<Vec<Install
         }
     }
 
+    let ownership = std::cell::OnceCell::new();
     for a in installed.iter_mut() {
         if let Some(m) = catalog_map.get(&a.dir_name) {
             a.catalog_id = Some(m.id.clone());
@@ -128,35 +134,49 @@ pub async fn enumerate_installed(state: &AppState) -> anyhow::Result<Vec<Install
             a.catalog_last_updated = if m.last_updated > 0 { Some(m.last_updated) } else { None };
             a.installed_at = install_timestamps.get(&m.id).cloned();
 
-            // Decide "up to date" by OR-ing two independent signals — either
-            // diverging means an update is needed. Matches Minion.
-            //
-            // - Marker signal: the catalog's `last_updated` moved since we
-            //   installed. Catches re-publishes that don't bump the manifest
-            //   `## Version:` (the file changed but the version string didn't).
-            //
-            // - Version signal: the local manifest's `## Version:` doesn't
-            //   match the catalog's UIVersion string. Catches the opposite —
-            //   the author bumped UIVersion on ESOUI but the zip they uploaded
-            //   still ships the old manifest (e.g. Quest Tracker Toggle: catalog
-            //   says 1.4, the zip's manifest says 1.0). Marker alone would let
-            //   this slip through because the catalog timestamp didn't move
-            //   between when we installed and now.
-            //
             // Older builds stored UIDate in milliseconds; new builds store
-            // unix-seconds. Normalize both sides so we compare apples-to-apples
-            // even if the marker was written by a previous version.
-            let normalize = |t: i64| if t > 100_000_000_000 { t / 1000 } else { t };
+            // unix-seconds.
+            let seconds = |t: i64| if t > 100_000_000_000 { t / 1000 } else { t };
+            let catalog_timestamp = seconds(m.last_updated);
             let marker = install_markers.get(&m.id).copied().unwrap_or(0);
             let has_marker = marker > 0;
-            let marker_diff = has_marker && normalize(marker) != normalize(m.last_updated);
+            let marker_diff = has_marker && seconds(marker) != catalog_timestamp;
             let version_diff = match a.version.as_deref() {
                 Some(local) => normalize_version(local) != normalize_version(&m.version),
                 // No manifest version line on disk: trust the marker if we
                 // have one, otherwise flag as needing attention.
                 None => !has_marker,
             };
-            a.update_available = marker_diff || version_diff;
+            let ownership = ownership
+                .get_or_init(|| installer::Ownership::read(&dir))
+                .as_ref();
+            let release = ownership.and_then(|registry| registry.releases.get(&m.id));
+            // A package's listing and manifest can use different labels.
+            // Compare exact listing labels for the recorded package so an
+            // ESOUI edit with the same timestamp still offers an update.
+            let package_update = release
+                .map(|release| {
+                    seconds(release.last_updated) != catalog_timestamp
+                        || release.version != m.version
+                })
+                .or_else(|| {
+                    m.legacy_installed_version
+                        .as_ref()
+                        .filter(|_| has_marker)
+                        .map(|version| marker_diff || version != &m.version)
+                });
+            // A replaced manifest may belong to an external install. Use the
+            // displayed version in that case, with the old timestamp behavior
+            // for installs without a package record.
+            let fallback = version_diff || (release.is_none() && marker_diff);
+            a.update_available = package_update
+                .filter(|update| {
+                    *update == fallback
+                        || ownership.is_some_and(|registry| {
+                            registry.owns_manifest(&dir, &a.dir_name, &m.id)
+                        })
+                })
+                .unwrap_or(fallback);
         }
     }
 
@@ -287,10 +307,7 @@ pub async fn sync_catalog(
 /// click reinstalled the same zip whose manifest still spelled the version
 /// the old way, so the loop never broke.
 ///
-/// Real version bumps still differ in their digit tokens (e.g. catalog `1.4`
-/// vs manifest `1.0` → `["1","4"]` vs `["1","0"]`), so the version-diff
-/// signal still catches the "author bumped UIVersion but uploaded a zip with
-/// the old manifest" case noted in `enumerate_installed`.
+/// Keep the digits in each component so e.g. `9.01` and `9.1` remain distinct.
 fn normalize_version(v: &str) -> String {
     v.split(|c: char| !c.is_ascii_digit())
         .filter(|s| !s.is_empty())
