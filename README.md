@@ -82,9 +82,16 @@ Copying or recreating tracked files also requires conflict resolution.
 
 Uninstall removes only unchanged files recorded as belonging to the selected
 addon, including its owned files in shared roots; other files are preserved.
-Legacy addons without a tracked manifest cannot be uninstalled automatically:
-verify and manage their files manually, or update with the confirmation above
-first. Modified tracked files also block uninstall until resolved.
+For a legacy addon without a tracked manifest, uninstall shows an unselected
+per-file list for that folder. Select only files you know you want removed;
+they may belong to another addon. Tracked files, links, unselected files, and
+files outside that folder are preserved, and all existing manifests must be
+selected to disable the addon. A backup of selected files is kept in
+`backups/addon-file-conflicts` with a `conflicts.txt` restoration guide; the
+exact path is shown after removal. Close ESO and Apocrypha before copying
+originals from its `files` directory back to the listed AddOns paths. Remaining
+files may leave the folder visible in Apocrypha. Modified tracked files block
+the normal uninstall until resolved.
 
 If an interrupted install or failed rollback leaves a hidden
 `.apocrypha-install-*` directory, recover its `backup` files first, then move

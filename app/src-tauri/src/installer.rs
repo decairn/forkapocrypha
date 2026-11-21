@@ -279,11 +279,20 @@ fn backup_conflicts(
     conflicts: &[FileConflict],
 ) -> Result<tempfile::TempDir> {
     let parent = backups_dir.join("addon-file-conflicts");
+    let addons_canonical = addons_dir.canonicalize()?;
+    let mut existing = parent.as_path();
+    while !existing.exists() {
+        existing = existing
+            .parent()
+            .ok_or_else(|| anyhow!("cannot resolve backup directory"))?;
+    }
+    if existing.canonicalize()?.starts_with(&addons_canonical) {
+        return Err(anyhow!(
+            "conflict backups must be stored outside the AddOns folder"
+        ));
+    }
     std::fs::create_dir_all(&parent)?;
-    if parent
-        .canonicalize()?
-        .starts_with(addons_dir.canonicalize()?)
-    {
+    if parent.canonicalize()?.starts_with(&addons_canonical) {
         return Err(anyhow!(
             "conflict backups must be stored outside the AddOns folder"
         ));
@@ -294,7 +303,7 @@ fn backup_conflicts(
     let files_dir = backup.path().join("files");
     std::fs::create_dir(&files_dir)?;
     let mut list = format!(
-        "Addon catalog ID: {addon_id}\nOriginal AddOns folder: {}\n\nOriginal conflict files are under files/ using these relative paths; this is not a full addon backup.\nTo restore, close Apocrypha and ESO, back up the current files, then copy the desired originals to the corresponding paths in AddOns. If restoring a manifest, remove the newer alternate extension so the game cannot load both. Restored files will need conflict resolution on the next update.\n\n",
+        "Addon ID or directory: {addon_id}\nOriginal AddOns folder: {}\n\nOriginal selected files are under files/ using these relative paths; this is not a full addon backup.\nTo restore, close Apocrypha and ESO, back up the current files, then copy the desired originals to the corresponding paths in AddOns. If restoring a manifest, remove the newer alternate extension so the game cannot load both. Restored files will need conflict resolution on the next update.\n\n",
         addons_dir.display()
     );
     for item in conflicts {
@@ -1025,6 +1034,128 @@ fn validate_dependency_version(addons_dir: &Path, dep: &Dependency) -> Result<()
 
 pub struct UninstallOutcome {
     pub preserved_files: bool,
+    pub backup_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LegacyUninstallFile {
+    path: String,
+    fingerprint: String,
+    manifest: bool,
+}
+
+#[derive(Serialize)]
+pub struct UninstallPreview {
+    legacy: bool,
+    addons_dir: String,
+    files: Vec<LegacyUninstallFile>,
+    protected_count: usize,
+    backup_dir: String,
+}
+
+fn validate_uninstall_dir(addons_dir: &Path, dir_name: &str) -> Result<PathBuf> {
+    if dir_name.is_empty()
+        || dir_name.contains('/')
+        || dir_name.contains('\\')
+        || dir_name.contains("..")
+    {
+        return Err(anyhow!("invalid addon directory name"));
+    }
+    path_key(Path::new(dir_name))?;
+    let target = addons_dir.join(dir_name);
+    match std::fs::symlink_metadata(&target) {
+        Ok(meta) if meta.file_type().is_dir() => Ok(target),
+        Ok(_) => Err(anyhow!("target is not a real addon directory")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(anyhow!("addon directory not found"))
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn manifest_path(dir_name: &str, rel: &Path) -> bool {
+    ["txt", "addon"].iter().any(|extension| {
+        let expected = PathBuf::from(dir_name).join(format!("{dir_name}.{extension}"));
+        if cfg!(windows) {
+            rel.to_string_lossy()
+                .eq_ignore_ascii_case(&expected.to_string_lossy())
+        } else {
+            rel == expected
+        }
+    })
+}
+
+pub async fn preview_uninstall(state: &AppState, dir_name: &str) -> Result<UninstallPreview> {
+    let _guard = state.addon_fs_mutations.lock().await;
+    let addons_dir = state.addons_dir.lock().unwrap().clone();
+    let target = validate_uninstall_dir(&addons_dir, dir_name)?;
+    ensure_no_unfinished_install(&addons_dir)?;
+    let (ownership, _) = load_ownership(&addons_dir)?;
+    let mut tracked_manifest = false;
+    let mut untracked_manifest = false;
+    for extension in ["txt", "addon"] {
+        let rel = PathBuf::from(dir_name).join(format!("{dir_name}.{extension}"));
+        if existing_file(&addons_dir, &rel)?.is_some() {
+            if ownership.files.contains_key(&path_key(&rel)?) {
+                tracked_manifest = true;
+            } else {
+                untracked_manifest = true;
+            }
+        }
+    }
+    if tracked_manifest && untracked_manifest {
+        return Err(anyhow!("cannot safely uninstall {dir_name}: tracked and untracked manifests coexist; review them manually"));
+    }
+    let mut result = UninstallPreview {
+        legacy: !tracked_manifest,
+        addons_dir: addons_dir.canonicalize()?.to_string_lossy().into_owned(),
+        files: Vec::new(),
+        protected_count: 0,
+        backup_dir: state
+            .backups_dir
+            .join("addon-file-conflicts")
+            .to_string_lossy()
+            .into_owned(),
+    };
+    if !result.legacy {
+        return Ok(result);
+    }
+    let mut pending = vec![target];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let ty = entry.file_type()?;
+            if ty.is_dir() {
+                pending.push(entry.path());
+            } else if ty.is_file() {
+                let path = entry.path();
+                let rel = path.strip_prefix(&addons_dir)?;
+                let key = match path_key(rel) {
+                    Ok(key) => key,
+                    Err(_) => {
+                        result.protected_count += 1;
+                        continue;
+                    }
+                };
+                if ownership.files.contains_key(&key) {
+                    result.protected_count += 1;
+                    continue;
+                }
+                result.files.push(LegacyUninstallFile {
+                    path: portable_path(rel)?,
+                    fingerprint: serde_json::to_string(&hash_file(&path)?)?,
+                    manifest: manifest_path(dir_name, rel),
+                });
+                if result.files.len() > 100_000 {
+                    return Err(anyhow!("too many untracked files to review"));
+                }
+            } else {
+                result.protected_count += 1;
+            }
+        }
+    }
+    result.files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(result)
 }
 
 pub async fn uninstall_addon(state: &AppState, dir_name: &str) -> Result<UninstallOutcome> {
@@ -1055,27 +1186,133 @@ pub async fn uninstall_addon(state: &AppState, dir_name: &str) -> Result<Uninsta
     Ok(outcome)
 }
 
+pub async fn uninstall_legacy(
+    state: &AppState,
+    dir_name: &str,
+    preview_root: &str,
+    approved: Vec<LegacyUninstallFile>,
+) -> Result<UninstallOutcome> {
+    let _guard = state.addon_fs_mutations.lock().await;
+    let addons_dir = state.addons_dir.lock().unwrap().clone();
+    let target = validate_uninstall_dir(&addons_dir, dir_name)?;
+    if addons_dir.canonicalize()? != Path::new(preview_root) {
+        return Err(anyhow!("AddOns folder changed since review; review again"));
+    }
+    ensure_no_unfinished_install(&addons_dir)?;
+    if approved.is_empty() {
+        return Err(anyhow!("no files selected for removal"));
+    }
+    let (ownership, registry_hash) = load_ownership(&addons_dir)?;
+    let mut keys = HashSet::new();
+    let mut conflicts = Vec::new();
+    let mut changes = Vec::new();
+    let mut dirs = HashSet::new();
+    for file in approved {
+        let rel = PathBuf::from(&file.path);
+        let key = path_key(&rel)?;
+        let root = rel
+            .components()
+            .next()
+            .and_then(|component| component.as_os_str().to_str())
+            .ok_or_else(|| anyhow!("invalid selected path"))?;
+        if !(if cfg!(windows) {
+            root.eq_ignore_ascii_case(dir_name)
+        } else {
+            root == dir_name
+        }) || rel.components().count() < 2
+            || !keys.insert(key.clone())
+        {
+            return Err(anyhow!(
+                "invalid or duplicate selected path: {}",
+                rel.display()
+            ));
+        }
+        if ownership.files.contains_key(&key) {
+            return Err(conflict(
+                &rel,
+                "file has tracked ownership and cannot be removed as legacy",
+            ));
+        }
+        let expected: FileFingerprint =
+            serde_json::from_str(&file.fingerprint).context("invalid file review fingerprint")?;
+        let path = existing_file(&addons_dir, &rel)?
+            .ok_or_else(|| conflict(&rel, "file disappeared since review"))?;
+        if hash_file(&path)? != expected {
+            return Err(conflict(&rel, "file changed since review"));
+        }
+        add_parent_dirs(&rel, &mut dirs);
+        conflicts.push(FileConflict {
+            rel: rel.clone(),
+            fingerprint: expected.clone(),
+            operation: "Remove",
+            action: "untracked file selected for uninstall",
+        });
+        changes.push(FileChange {
+            rel,
+            install: false,
+            expected_hash: Some(expected),
+        });
+    }
+    let mut selected_manifest = false;
+    for extension in ["txt", "addon"] {
+        let rel = PathBuf::from(dir_name).join(format!("{dir_name}.{extension}"));
+        if existing_file(&addons_dir, &rel)?.is_some() {
+            let key = path_key(&rel)?;
+            if ownership.files.contains_key(&key) {
+                return Err(anyhow!(
+                    "a tracked manifest cannot be removed through legacy uninstall"
+                ));
+            }
+            if !keys.contains(&key) {
+                return Err(anyhow!(
+                    "select every existing addon manifest to complete uninstall"
+                ));
+            }
+            selected_manifest = true;
+        }
+    }
+    let backup = backup_conflicts(&addons_dir, &state.backups_dir, dir_name, &conflicts)?;
+    verify_conflict_backup(&addons_dir, backup.path(), &conflicts)?;
+    if load_ownership(&addons_dir)?.1 != registry_hash {
+        return Err(anyhow!(
+            "ownership registry changed since review; review again"
+        ));
+    }
+    let backup_path = backup.keep();
+    let result = (|| -> Result<()> {
+        let work = tempfile::Builder::new()
+            .prefix(".apocrypha-install-")
+            .tempdir_in(&addons_dir)?;
+        let staged = work.path().join("staged");
+        let rollback = work.path().join("backup");
+        std::fs::create_dir(&staged)?;
+        std::fs::create_dir(&rollback)?;
+        commit_file_changes(work, &addons_dir, &staged, &rollback, &changes)?;
+        cleanup_empty_dirs(&addons_dir, dirs)?;
+        if selected_manifest {
+            let conn = state.db.lock().unwrap();
+            db::set_metadata(&conn, &format!("installed_dir:{dir_name}"), "")
+                .context("files were removed but directory marker cleanup failed")?;
+        }
+        Ok(())
+    })();
+    result.with_context(|| {
+        format!(
+            "original selected files are backed up at {}",
+            backup_path.display()
+        )
+    })?;
+    Ok(UninstallOutcome {
+        preserved_files: target.exists(),
+        backup_path: Some(backup_path),
+    })
+}
+
 fn uninstall(
     addons_dir: &Path,
     dir_name: &str,
 ) -> Result<(String, HashSet<String>, UninstallOutcome)> {
-    if dir_name.is_empty()
-        || dir_name.contains('/')
-        || dir_name.contains('\\')
-        || dir_name.contains("..")
-    {
-        return Err(anyhow!("invalid addon directory name"));
-    }
-    path_key(Path::new(dir_name))?;
-    let target = addons_dir.join(dir_name);
-    match std::fs::symlink_metadata(&target) {
-        Ok(meta) if meta.file_type().is_dir() => {}
-        Ok(_) => return Err(anyhow!("target is not a real addon directory")),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(anyhow!("addon directory not found"))
-        }
-        Err(e) => return Err(e.into()),
-    }
+    let target = validate_uninstall_dir(addons_dir, dir_name)?;
     ensure_no_unfinished_install(addons_dir)?;
     let (mut ownership, registry_hash) = load_ownership(addons_dir)?;
     let mut owner: Option<String> = None;
@@ -1120,14 +1357,7 @@ fn uninstall(
                     "owned file was modified; uninstall was not started",
                 ));
             }
-            let mut parent = rel.parent();
-            while let Some(dir) = parent {
-                if dir.as_os_str().is_empty() {
-                    break;
-                }
-                dirs.insert(dir.to_path_buf());
-                parent = dir.parent();
-            }
+            add_parent_dirs(&rel, &mut dirs);
             changes.push(FileChange {
                 rel,
                 install: false,
@@ -1150,6 +1380,29 @@ fn uninstall(
         expected_hash: registry_hash,
     });
     commit_file_changes(work, addons_dir, &staged, &backup, &changes)?;
+    cleanup_empty_dirs(addons_dir, dirs)?;
+    Ok((
+        owner,
+        roots,
+        UninstallOutcome {
+            preserved_files: target.exists(),
+            backup_path: None,
+        },
+    ))
+}
+
+fn add_parent_dirs(rel: &Path, dirs: &mut HashSet<PathBuf>) {
+    let mut parent = rel.parent();
+    while let Some(dir) = parent {
+        if dir.as_os_str().is_empty() {
+            break;
+        }
+        dirs.insert(dir.to_path_buf());
+        parent = dir.parent();
+    }
+}
+
+fn cleanup_empty_dirs(addons_dir: &Path, dirs: HashSet<PathBuf>) -> Result<()> {
     let mut dirs: Vec<_> = dirs.into_iter().collect();
     dirs.sort_by_key(|dir| std::cmp::Reverse(dir.components().count()));
     for dir in dirs {
@@ -1169,13 +1422,7 @@ fn uninstall(
             }
         }
     }
-    Ok((
-        owner,
-        roots,
-        UninstallOutcome {
-            preserved_files: target.exists(),
-        },
-    ))
+    Ok(())
 }
 
 /// One-shot migration for users coming from v0.1.8 / v0.1.9. Those builds
@@ -1489,6 +1736,243 @@ mod tests {
             archive.write_all(data)?;
         }
         Ok(archive.finish()?.into_inner())
+    }
+
+    fn legacy_state(temp: &tempfile::TempDir) -> Result<AppState> {
+        let addons = temp.path().join("AddOns");
+        std::fs::create_dir_all(addons.join("Example"))?;
+        Ok(AppState {
+            db: std::sync::Mutex::new(db::open(&temp.path().join("catalog.db"))?),
+            addons_dir: std::sync::Mutex::new(addons),
+            addon_fs_mutations: tokio::sync::Mutex::new(()),
+            backups_dir: temp.path().join("backups"),
+            mmoui: crate::api::MmouiClient::new(),
+            syncing: AtomicBool::new(false),
+            close_to_tray: AtomicBool::new(false),
+            auto_update_interval_minutes: AtomicU64::new(0),
+        })
+    }
+
+    #[tokio::test]
+    async fn legacy_uninstall_backs_up_selected_files_and_preserves_everything_else() -> Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let state = legacy_state(&temp)?;
+        let addons = temp.path().join("AddOns");
+        std::fs::write(addons.join("Example/Example.txt"), b"legacy manifest")?;
+        std::fs::write(addons.join("Example/mine.lua"), b"mine")?;
+        std::fs::write(addons.join("Example/unknown.lua"), b"unknown shared")?;
+        std::fs::create_dir(addons.join("shared"))?;
+        std::fs::write(addons.join("shared/outside"), b"outside")?;
+        extract_zip(
+            &archive(&[("Example/tracked.lua", b"other addon")])?,
+            &addons,
+            "other",
+        )?;
+        {
+            let conn = state.db.lock().unwrap();
+            db::set_metadata(&conn, "installed_dir:Example", "old")?;
+        }
+        let preview = preview_uninstall(&state, "Example").await?;
+        assert!(preview.legacy);
+        assert_eq!(preview.files.len(), 3);
+        assert_eq!(preview.protected_count, 1);
+        assert!(addons.join("Example/Example.txt").exists());
+        let approved: Vec<_> = preview
+            .files
+            .into_iter()
+            .filter(|file| file.manifest || file.path.ends_with("/mine.lua"))
+            .collect();
+        let approved = serde_json::from_str(&serde_json::to_string(&approved)?)?;
+        let result = uninstall_legacy(&state, "Example", &preview.addons_dir, approved).await?;
+        assert!(result.preserved_files);
+        let backup = result.backup_path.unwrap();
+        assert_eq!(
+            std::fs::read(backup.join("files/Example/Example.txt"))?,
+            b"legacy manifest"
+        );
+        assert_eq!(
+            std::fs::read(backup.join("files/Example/mine.lua"))?,
+            b"mine"
+        );
+        assert!(!addons.join("Example/Example.txt").exists());
+        assert!(!addons.join("Example/mine.lua").exists());
+        assert_eq!(
+            std::fs::read(addons.join("Example/unknown.lua"))?,
+            b"unknown shared"
+        );
+        assert_eq!(
+            std::fs::read(addons.join("Example/tracked.lua"))?,
+            b"other addon"
+        );
+        assert_eq!(std::fs::read(addons.join("shared/outside"))?, b"outside");
+        let (ownership, _) = load_ownership(&addons)?;
+        assert!(ownership
+            .files
+            .values()
+            .any(|entry| entry.addon_id == "other"));
+        std::fs::copy(
+            backup.join("files/Example/Example.txt"),
+            addons.join("Example/Example.txt"),
+        )?;
+        assert_eq!(
+            std::fs::read(addons.join("Example/Example.txt"))?,
+            b"legacy manifest"
+        );
+        assert_eq!(
+            std::fs::read(addons.join("Example/tracked.lua"))?,
+            b"other addon"
+        );
+        let conn = state.db.lock().unwrap();
+        assert_eq!(
+            db::get_metadata(&conn, "installed_dir:Example").as_deref(),
+            Some("")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_uninstall_revalidates_approval_and_never_removes_tracked_files() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let state = legacy_state(&temp)?;
+        let addons = temp.path().join("AddOns");
+        std::fs::write(addons.join("Example/Example.txt"), b"manifest")?;
+        std::fs::write(addons.join("Example/user.lua"), b"original")?;
+        extract_zip(
+            &archive(&[("Example/tracked.lua", b"other")])?,
+            &addons,
+            "other",
+        )?;
+        let preview = preview_uninstall(&state, "Example").await?;
+        assert!(
+            uninstall_legacy(&state, "Example", &preview.addons_dir, Vec::new())
+                .await
+                .is_err()
+        );
+        let mut forged = preview.files.clone();
+        forged.push(LegacyUninstallFile {
+            path: "Example/tracked.lua".into(),
+            fingerprint: serde_json::to_string(&hash_file(&addons.join("Example/tracked.lua"))?)?,
+            manifest: false,
+        });
+        assert!(
+            uninstall_legacy(&state, "Example", &preview.addons_dir, forged)
+                .await
+                .is_err()
+        );
+        let mut outside = preview.files.clone();
+        outside.push(LegacyUninstallFile {
+            path: "../outside".into(),
+            fingerprint: preview.files[0].fingerprint.clone(),
+            manifest: false,
+        });
+        assert!(
+            uninstall_legacy(&state, "Example", &preview.addons_dir, outside)
+                .await
+                .is_err()
+        );
+        std::fs::write(addons.join("Example/user.lua"), b"edited")?;
+        assert!(
+            uninstall_legacy(&state, "Example", &preview.addons_dir, preview.files)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read(addons.join("Example/Example.txt"))?,
+            b"manifest"
+        );
+        assert_eq!(std::fs::read(addons.join("Example/user.lua"))?, b"edited");
+        assert_eq!(std::fs::read(addons.join("Example/tracked.lua"))?, b"other");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_uninstall_requires_all_current_manifests_and_working_backup() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut state = legacy_state(&temp)?;
+        let addons = temp.path().join("AddOns");
+        std::fs::write(addons.join("Example/Example.txt"), b"manifest")?;
+        std::fs::write(addons.join("Example/file"), b"data")?;
+        let preview = preview_uninstall(&state, "Example").await?;
+        let without_manifest = preview
+            .files
+            .iter()
+            .filter(|file| !file.manifest)
+            .cloned()
+            .collect();
+        assert!(
+            uninstall_legacy(&state, "Example", &preview.addons_dir, without_manifest)
+                .await
+                .is_err()
+        );
+        std::fs::write(addons.join("Example/Example.addon"), b"new manifest")?;
+        assert!(
+            uninstall_legacy(&state, "Example", &preview.addons_dir, preview.files)
+                .await
+                .is_err()
+        );
+        std::fs::remove_file(addons.join("Example/Example.addon"))?;
+        let preview = preview_uninstall(&state, "Example").await?;
+        state.backups_dir = addons.join("unsafe-backups");
+        assert!(
+            uninstall_legacy(&state, "Example", &preview.addons_dir, preview.files)
+                .await
+                .is_err()
+        );
+        assert!(!addons.join("unsafe-backups").exists());
+        assert_eq!(
+            std::fs::read(addons.join("Example/Example.txt"))?,
+            b"manifest"
+        );
+        assert_eq!(std::fs::read(addons.join("Example/file"))?, b"data");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn legacy_review_waits_for_filesystem_mutation_guard() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let state = std::sync::Arc::new(legacy_state(&temp)?);
+        std::fs::write(temp.path().join("AddOns/Example/Example.txt"), b"manifest")?;
+        let guard = state.addon_fs_mutations.lock().await;
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let worker_state = state.clone();
+        let mut review = tokio::spawn(async move {
+            started_tx.send(()).unwrap();
+            preview_uninstall(&worker_state, "Example").await
+        });
+        started_rx.await?;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut review)
+                .await
+                .is_err()
+        );
+        drop(guard);
+        let preview = review.await??;
+        assert!(preview.legacy);
+        assert_eq!(preview.files.len(), 1);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn legacy_review_never_follows_or_removes_links() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let state = legacy_state(&temp)?;
+        let addons = temp.path().join("AddOns");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&outside)?;
+        std::fs::write(outside.join("file"), b"keep")?;
+        std::fs::write(addons.join("Example/Example.txt"), b"manifest")?;
+        std::os::unix::fs::symlink(&outside, addons.join("Example/link"))?;
+        let preview = preview_uninstall(&state, "Example").await?;
+        assert_eq!(preview.protected_count, 1);
+        assert_eq!(preview.files.len(), 1);
+        uninstall_legacy(&state, "Example", &preview.addons_dir, preview.files).await?;
+        assert_eq!(std::fs::read(outside.join("file"))?, b"keep");
+        assert!(std::fs::symlink_metadata(addons.join("Example/link"))?
+            .file_type()
+            .is_symlink());
+        Ok(())
     }
 
     #[test]

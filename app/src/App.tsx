@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Sidebar, type PageId } from "@/components/Sidebar";
 import { SyncBanner, type SyncStatus } from "@/components/SyncBanner";
@@ -7,7 +7,9 @@ import { WelcomeScreen, welcomeAlreadyShown } from "@/components/WelcomeScreen";
 import { SearchPage } from "@/pages/SearchPage";
 import { InstalledPage } from "@/pages/InstalledPage";
 import { SettingsPage } from "@/pages/SettingsPage";
-import type { CatalogMeta } from "@/lib/types";
+import { LegacyUninstallDialog } from "@/components/LegacyUninstallDialog";
+import { api } from "@/lib/api";
+import type { CatalogMeta, LegacyUninstallFile, UninstallPreview } from "@/lib/types";
 
 function App() {
   const [page, setPage] = useState<PageId>("search");
@@ -15,6 +17,40 @@ function App() {
   const [catalogTick, setCatalogTick] = useState(0);
   const [showWelcome, setShowWelcome] = useState(() => !welcomeAlreadyShown());
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
+  const [uninstallReview, setUninstallReview] = useState<{
+    dirName: string;
+    preview: UninstallPreview;
+    resolve: (completed: boolean) => void;
+  } | null>(null);
+  const uninstallPending = useRef(false);
+
+  const requestUninstall = useCallback(async (dirName: string): Promise<boolean> => {
+    if (uninstallPending.current) {
+      pushToast({ tone: "info", title: "Finish the current uninstall first" });
+      return false;
+    }
+    uninstallPending.current = true;
+    try {
+      let preview: UninstallPreview;
+      try {
+        preview = await api.previewUninstall(dirName);
+      } catch (error) {
+        pushToast({ tone: "error", title: `Couldn't review ${dirName}`, body: String(error) });
+        return false;
+      }
+      if (!preview.legacy) {
+        try {
+          await api.uninstallAddon(dirName);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      return await new Promise<boolean>((resolve) => setUninstallReview({ dirName, preview, resolve }));
+    } finally {
+      uninstallPending.current = false;
+    }
+  }, [pushToast]);
 
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
@@ -62,7 +98,14 @@ function App() {
         }),
       );
       unlisteners.push(
-        await listen<{ dir_name: string; preserved_files: boolean }>("addon:uninstall:done", (e) => {
+        await listen<{ dir_name: string; preserved_files: boolean; backup_path: string | null }>("addon:uninstall:done", (e) => {
+          if (e.payload.backup_path) {
+            pushToast({
+              tone: "info",
+              title: "Removed files backed up",
+              body: e.payload.backup_path,
+            });
+          }
           if (e.payload.preserved_files) {
             pushToast({
               tone: "info",
@@ -96,12 +139,32 @@ function App() {
       <main className="relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]">
         <SyncBanner status={syncStatus} />
         <div className="flex-1 overflow-hidden" key={catalogTick}>
-          {page === "search" && <SearchPage />}
-          {page === "installed" && <InstalledPage />}
+          {page === "search" && <SearchPage onUninstall={requestUninstall} />}
+          {page === "installed" && <InstalledPage onUninstall={requestUninstall} />}
           {page === "settings" && <SettingsPage />}
         </div>
       </main>
       <Toaster toasts={toasts} onDismiss={dismissToast} />
+      {uninstallReview && (
+        <LegacyUninstallDialog
+          dirName={uninstallReview.dirName}
+          preview={uninstallReview.preview}
+          onCancel={() => {
+            uninstallReview.resolve(false);
+            setUninstallReview(null);
+          }}
+          onConfirm={async (files: LegacyUninstallFile[]) => {
+            try {
+              await api.uninstallLegacy(uninstallReview.dirName, uninstallReview.preview.addons_dir, files);
+              uninstallReview.resolve(true);
+            } catch {
+              uninstallReview.resolve(false);
+            } finally {
+              setUninstallReview(null);
+            }
+          }}
+        />
+      )}
       {showWelcome ? <WelcomeScreen onDismiss={() => setShowWelcome(false)} /> : null}
     </div>
   );

@@ -5,9 +5,11 @@ import type {
   CatalogMeta,
   Category,
   InstalledAddon,
+  LegacyUninstallFile,
   SearchResult,
   Snapshot,
   SortKey,
+  UninstallPreview,
 } from "./types";
 
 export const api = {
@@ -57,6 +59,14 @@ export const api = {
 
   uninstallAddon(dirName: string): Promise<void> {
     return invoke<void>("uninstall_addon", { dirName });
+  },
+
+  previewUninstall(dirName: string): Promise<UninstallPreview> {
+    return invoke<UninstallPreview>("preview_uninstall_addon", { dirName });
+  },
+
+  uninstallLegacy(dirName: string, previewRoot: string, approved: LegacyUninstallFile[]): Promise<void> {
+    return invoke<void>("uninstall_legacy_addon", { dirName, previewRoot, approved });
   },
 
   getAddonById(id: string): Promise<Addon | null> {

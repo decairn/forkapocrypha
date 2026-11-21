@@ -13,7 +13,7 @@ import { AddonDetailPanel } from "@/components/AddonDetailPanel";
 import { api } from "@/lib/api";
 import type { Addon, InstalledAddon } from "@/lib/types";
 
-export function InstalledPage() {
+export function InstalledPage({ onUninstall }: { onUninstall: (dirName: string) => Promise<boolean> }) {
   const [addons, setAddons] = useState<InstalledAddon[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -110,11 +110,17 @@ export function InstalledPage() {
       return next;
     });
     try {
-      await api.uninstallAddon(addon.dir_name);
+      await onUninstall(addon.dir_name);
     } catch (e) {
       console.error(e);
+    } finally {
+      setUninstalling((prev) => {
+        const next = new Set(prev);
+        next.delete(addon.dir_name);
+        return next;
+      });
     }
-  }, []);
+  }, [onUninstall]);
 
   const handleUpdate = useCallback(async (addon: InstalledAddon) => {
     if (!addon.catalog_id) return;

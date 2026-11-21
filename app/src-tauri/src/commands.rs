@@ -370,21 +370,60 @@ pub fn delete_savedvars_snapshot(state: State<'_, AppState>, id: String) -> CmdR
 }
 
 #[tauri::command]
+pub async fn preview_uninstall_addon(
+    state: State<'_, AppState>,
+    dir_name: String,
+) -> CmdResult<installer::UninstallPreview> {
+    installer::preview_uninstall(state.inner(), &dir_name)
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
 pub async fn uninstall_addon(
     app: AppHandle,
     state: State<'_, AppState>,
     dir_name: String,
 ) -> CmdResult<()> {
-    match installer::uninstall_addon(state.inner(), &dir_name).await {
+    report_uninstall(
+        &app,
+        &dir_name,
+        installer::uninstall_addon(state.inner(), &dir_name).await,
+    )
+}
+
+#[tauri::command]
+pub async fn uninstall_legacy_addon(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    dir_name: String,
+    preview_root: String,
+    approved: Vec<installer::LegacyUninstallFile>,
+) -> CmdResult<()> {
+    let result =
+        installer::uninstall_legacy(state.inner(), &dir_name, &preview_root, approved).await;
+    report_uninstall(&app, &dir_name, result)
+}
+
+fn report_uninstall(
+    app: &AppHandle,
+    dir_name: &str,
+    result: anyhow::Result<installer::UninstallOutcome>,
+) -> CmdResult<()> {
+    match result {
         Ok(outcome) => {
             let _ = app.emit(
                 "addon:uninstall:done",
-                &serde_json::json!({ "dir_name": &dir_name, "preserved_files": outcome.preserved_files }),
+                &serde_json::json!({
+                    "dir_name": dir_name,
+                    "preserved_files": outcome.preserved_files,
+                    "backup_path": outcome.backup_path.map(|path| path.to_string_lossy().into_owned())
+                }),
             );
             Ok(())
         }
         Err(e) => {
-            let msg = e.to_string();
+            let msg = format!("{e:#}");
             let _ = app.emit(
                 "addon:uninstall:error",
                 &serde_json::json!({ "dir_name": &dir_name, "error": &msg }),
