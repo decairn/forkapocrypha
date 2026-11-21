@@ -14,7 +14,10 @@ import type { Addon, Category, SortKey } from "@/lib/types";
 const PAGE_SIZE = 30;
 type InstallationStatus = "both" | "installed" | "not-installed";
 
-export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => Promise<boolean> }) {
+export function SearchPage({ onInstall, onUninstall }: {
+  onInstall: (addonId: string) => Promise<string[]>;
+  onUninstall: (dirName: string) => Promise<boolean>;
+}) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [activeCategory, setActiveCategory] = useState<string>("");
   const [sortBy, setSortBy] = useState<SortKey>("download_total");
@@ -190,8 +193,8 @@ export function SearchPage({ onUninstall }: { onUninstall: (dirName: string) => 
   }, [refreshInstalledSet]);
 
   const handleInstall = useCallback((addon: Addon) => {
-    api.installAddon(addon.id).catch((e) => console.error("install error:", e));
-  }, []);
+    onInstall(addon.id).catch((e) => console.error("install error:", e));
+  }, [onInstall]);
 
   const isAddonInstalled = useCallback(
     (addon: Addon) => installedByCatalogId?.has(addon.id) ?? false,

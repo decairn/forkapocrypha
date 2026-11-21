@@ -85,3 +85,10 @@ export interface UninstallPreview {
   protected_count: number;
   backup_dir: string;
 }
+
+export interface InstallConflictReview {
+  id: string;
+  backup_path: string;
+  file_count: number;
+  files: { path: string; operation: string; reason: string }[];
+}

@@ -5,8 +5,10 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
-use tauri::{AppHandle, Emitter};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use std::sync::Mutex;
+use std::time::Duration;
+use tauri::{ipc::Channel, AppHandle, Emitter, Manager};
+use tokio::sync::oneshot;
 
 use crate::db;
 use crate::scanner;
@@ -25,11 +27,68 @@ struct InstallProgress<'a> {
     phase: &'a str,
 }
 
+#[derive(Clone, Serialize)]
+pub struct InstallConflictReview {
+    id: String,
+    backup_path: String,
+    file_count: usize,
+    files: Vec<InstallConflictFile>,
+}
+
+#[derive(Clone, Serialize)]
+struct InstallConflictFile {
+    path: String,
+    operation: &'static str,
+    reason: &'static str,
+}
+
+#[derive(Default)]
+pub struct InstallConflictApproval {
+    pending: Mutex<Option<(String, oneshot::Sender<bool>)>>,
+}
+
+impl InstallConflictApproval {
+    fn take(&self, id: &str) -> Option<oneshot::Sender<bool>> {
+        let mut pending = self.pending.lock().unwrap();
+        if pending.as_ref().is_some_and(|(current, _)| current == id) {
+            return pending.take().map(|(_, sender)| sender);
+        }
+        None
+    }
+
+    pub fn resolve(&self, id: &str, approved: bool) -> Result<()> {
+        self.take(id)
+            .ok_or_else(|| anyhow!("this conflict review is no longer pending"))?
+            .send(approved)
+            .map_err(|_| anyhow!("this conflict review is no longer pending"))
+    }
+
+    async fn request(
+        &self,
+        channel: &Channel<InstallConflictReview>,
+        review: InstallConflictReview,
+    ) -> Result<bool> {
+        let id = review.id.clone();
+        let (sender, receiver) = oneshot::channel();
+        *self.pending.lock().unwrap() = Some((id.clone(), sender));
+        let result = async {
+            channel.send(review).context("could not open conflict review")?;
+            tokio::time::timeout(Duration::from_secs(15 * 60), receiver)
+                .await
+                .context("conflict review timed out")?
+                .context("conflict review closed")
+        }
+        .await;
+        drop(self.take(&id));
+        result
+    }
+}
+
 pub async fn install_addon(
     state: &AppState,
     app: &AppHandle,
     addon_id: String,
-    interactive: bool,
+    conflict_review: Option<&Channel<InstallConflictReview>>,
 ) -> Result<Vec<String>> {
     // Hold one guard for the full dependency tree; install_one recurses without locking.
     let _mutation_guard = state.addon_fs_mutations.lock().await;
@@ -46,7 +105,7 @@ pub async fn install_addon(
             &mut visited,
             &mut installed_dirs,
             &mut dependencies,
-            interactive,
+            conflict_review,
         )
         .await?;
         validate_dependencies(&addons_dir, &dependencies)?;
@@ -65,7 +124,7 @@ async fn install_one(
     visited: &mut HashSet<String>,
     installed_dirs: &mut Vec<String>,
     dependencies: &mut Vec<Dependency>,
-    interactive: bool,
+    conflict_review: Option<&Channel<InstallConflictReview>>,
 ) -> Result<()> {
     if !visited.insert(addon_id.clone()) {
         return Ok(());
@@ -104,29 +163,38 @@ async fn install_one(
     );
 
     std::fs::create_dir_all(addons_dir)?;
-    let mut saved_backup = None;
-    let result = extract_zip_with_resolution(&bytes, addons_dir, &addon_id, &mut |conflicts| {
-        if !interactive {
-            return Err(anyhow!("update requires approval for existing untracked or modified files; update this addon manually in Apocrypha"));
-        }
+    let staged = stage_install(&bytes, addons_dir, &addon_id)?;
+    let saved_backup = if staged.conflicts.is_empty() {
+        None
+    } else {
+        let channel = conflict_review.ok_or_else(|| anyhow!(
+            "update requires approval for existing untracked or modified files; update this addon manually in Apocrypha"
+        ))?;
+        let conflicts = &staged.conflicts;
         let backup = backup_conflicts(addons_dir, &state.backups_dir, &addon_id, conflicts)?;
-        let preview = conflicts
-            .iter()
-            .take(12)
-            .map(|c| format!("{}: {} ({})", c.operation, c.rel.display(), c.action))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let prompt = format!(
-                "This update would replace or remove {} existing untracked or modified file(s). They might belong to another addon.\n\n{}\n\nThe full list and copies of the originals are in:\n{}\n\nReview conflicts.txt there before choosing. If you continue, replacement files are recorded as belonging to this addon and may be removed on uninstall. The originals will be kept for manual recovery.",
-                conflicts.len(), preview, backup.path().display()
-            );
+        let review = InstallConflictReview {
+            id: backup
+                .path()
+                .file_name()
+                .context("conflict backup has no directory name")?
+                .to_string_lossy()
+                .into_owned(),
+            backup_path: backup.path().display().to_string(),
+            file_count: conflicts.len(),
+            files: conflicts
+                .iter()
+                .take(12)
+                .map(|file| InstallConflictFile {
+                    path: file.rel.display().to_string(),
+                    operation: file.operation,
+                    reason: file.action,
+                })
+                .collect(),
+        };
         if !app
-            .dialog()
-            .message(prompt)
-            .title("Review addon file conflicts")
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancel)
-            .blocking_show()
+            .state::<InstallConflictApproval>()
+            .request(channel, review)
+            .await?
         {
             backup
                 .close()
@@ -141,10 +209,9 @@ async fn install_one(
             "addon:install:backup",
             serde_json::json!({ "id": &addon_id, "path": path.to_string_lossy() }),
         );
-        saved_backup = Some(path);
-        Ok(())
-    });
-    let extracted = result.map_err(|error| match saved_backup {
+        Some(path)
+    };
+    let extracted = staged.commit(addons_dir).map_err(|error| match saved_backup {
         Some(path) => anyhow!(
             "{error:#}; original conflicting files are backed up at {}",
             path.display()
@@ -212,7 +279,7 @@ async fn install_one(
                 visited,
                 installed_dirs,
                 dependencies,
-                interactive,
+                conflict_review,
             ))
             .await?;
         } else if let Some(min_version) = dep.min_version {
@@ -517,12 +584,37 @@ fn ensure_no_unfinished_install(addons_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn extract_zip_with_resolution(
     bytes: &[u8],
     addons_dir: &Path,
     addon_id: &str,
     resolve: &mut impl FnMut(&[FileConflict]) -> Result<()>,
 ) -> Result<Vec<String>> {
+    let staged = stage_install(bytes, addons_dir, addon_id)?;
+    if !staged.conflicts.is_empty() {
+        resolve(&staged.conflicts)?;
+    }
+    staged.commit(addons_dir)
+}
+
+struct StagedInstall {
+    work: tempfile::TempDir,
+    changes: Vec<FileChange>,
+    conflicts: Vec<FileConflict>,
+    roots: Vec<String>,
+}
+
+impl StagedInstall {
+    fn commit(self, addons_dir: &Path) -> Result<Vec<String>> {
+        let staged = self.work.path().join("staged");
+        let backup = self.work.path().join("backup");
+        commit_file_changes(self.work, addons_dir, &staged, &backup, &self.changes)?;
+        Ok(self.roots)
+    }
+}
+
+fn stage_install(bytes: &[u8], addons_dir: &Path, addon_id: &str) -> Result<StagedInstall> {
     ensure_no_unfinished_install(addons_dir)?;
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
     if archive.len() > 100_000 {
@@ -740,9 +832,6 @@ fn extract_zip_with_resolution(
             expected_hash: current,
         });
     }
-    if !conflicts.is_empty() {
-        resolve(&conflicts)?;
-    }
     ownership
         .files
         .retain(|_, entry| entry.addon_id != addon_id);
@@ -762,10 +851,14 @@ fn extract_zip_with_resolution(
         install: true,
         expected_hash: registry_hash,
     });
-    commit_file_changes(work, addons_dir, &staged, &backup, &changes)?;
     let mut roots: Vec<_> = root_dirs.into_iter().collect();
     roots.sort();
-    Ok(roots)
+    Ok(StagedInstall {
+        work,
+        changes,
+        conflicts,
+        roots,
+    })
 }
 
 fn commit_file_changes(
@@ -1520,6 +1613,28 @@ fn merge_dir_into(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn conflict_review_accepts_only_the_current_decision() -> Result<()> {
+        let approval = std::sync::Arc::new(InstallConflictApproval::default());
+        for (id, approved) in [("first", false), ("second", true)] {
+            let respond = approval.clone();
+            let channel = Channel::new(move |_| {
+                assert!(respond.resolve("stale", true).is_err());
+                respond.resolve(id, approved).unwrap();
+                assert!(respond.resolve(id, !approved).is_err());
+                Ok(())
+            });
+            let review = InstallConflictReview {
+                id: id.to_string(),
+                backup_path: String::new(),
+                file_count: 0,
+                files: Vec::new(),
+            };
+            assert_eq!(approval.request(&channel, review).await?, approved);
+        }
+        Ok(())
+    }
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicU64};
     use zip::write::SimpleFileOptions;

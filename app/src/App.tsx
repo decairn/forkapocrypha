@@ -8,8 +8,9 @@ import { SearchPage } from "@/pages/SearchPage";
 import { InstalledPage } from "@/pages/InstalledPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { LegacyUninstallDialog } from "@/components/LegacyUninstallDialog";
+import { InstallConflictDialog } from "@/components/InstallConflictDialog";
 import { api } from "@/lib/api";
-import type { CatalogMeta, LegacyUninstallFile, UninstallPreview } from "@/lib/types";
+import type { CatalogMeta, InstallConflictReview, LegacyUninstallFile, UninstallPreview } from "@/lib/types";
 
 function App() {
   const [page, setPage] = useState<PageId>("search");
@@ -23,6 +24,19 @@ function App() {
     resolve: (completed: boolean) => void;
   } | null>(null);
   const uninstallPending = useRef(false);
+  const [installReview, setInstallReview] = useState<InstallConflictReview | null>(null);
+
+  const requestInstall = useCallback(async (addonId: string) => {
+    let reviewId: string | undefined;
+    try {
+      return await api.installAddon(addonId, (review) => {
+        reviewId = review.id;
+        setInstallReview(review);
+      });
+    } finally {
+      setInstallReview((current) => current?.id === reviewId ? null : current);
+    }
+  }, []);
 
   const requestUninstall = useCallback(async (dirName: string): Promise<boolean> => {
     if (uninstallPending.current) {
@@ -150,8 +164,8 @@ function App() {
       <main className="relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]">
         <SyncBanner status={syncStatus} />
         <div className="flex-1 overflow-hidden" key={catalogTick}>
-          {page === "search" && <SearchPage onUninstall={requestUninstall} />}
-          {page === "installed" && <InstalledPage onUninstall={requestUninstall} />}
+          {page === "search" && <SearchPage onInstall={requestInstall} onUninstall={requestUninstall} />}
+          {page === "installed" && <InstalledPage onInstall={requestInstall} onUninstall={requestUninstall} />}
           {page === "settings" && <SettingsPage />}
         </div>
       </main>
@@ -173,6 +187,16 @@ function App() {
             } finally {
               setUninstallReview(null);
             }
+          }}
+        />
+      )}
+      {installReview && (
+        <InstallConflictDialog
+          key={installReview.id}
+          review={installReview}
+          onDecision={async (approved) => {
+            await api.resolveInstallConflict(installReview.id, approved);
+            setInstallReview((current) => current?.id === installReview.id ? null : current);
           }}
         />
       )}
