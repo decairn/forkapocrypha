@@ -1,8 +1,9 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use serde::Serialize;
-use std::collections::HashSet;
-use std::io::Cursor;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashSet};
+use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 
@@ -99,7 +100,7 @@ async fn install_one(
     std::fs::create_dir_all(addons_dir)?;
     let extracted = {
         let _lock = state.addon_files_lock.lock().unwrap();
-        extract_zip(&bytes, addons_dir)?
+        extract_zip(&bytes, addons_dir, &addon_id)?
     };
     for d in &extracted {
         if !installed_dirs.contains(d) {
@@ -186,7 +187,187 @@ fn is_noise_root(name: &str) -> bool {
     matches!(name, "__MACOSX" | ".DS_Store")
 }
 
-fn extract_zip(bytes: &[u8], addons_dir: &Path) -> Result<Vec<String>> {
+const OWNERSHIP_FILE: &str = ".apocrypha-ownership.json";
+
+#[derive(Default, Serialize, Deserialize)]
+struct Ownership {
+    files: BTreeMap<String, OwnedFile>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct OwnedFile {
+    path: String,
+    addon_id: String,
+    fingerprint: FileFingerprint,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct FileFingerprint {
+    sha256: [u8; 32],
+    volume: u64,
+    file_id: u64,
+}
+
+#[derive(Serialize)]
+struct FileChange {
+    rel: PathBuf,
+    install: bool,
+    expected_hash: Option<FileFingerprint>,
+}
+
+fn path_key(path: &Path) -> Result<String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        let Component::Normal(name) = component else {
+            return Err(anyhow!("invalid ownership path: {}", path.display()));
+        };
+        let name = name
+            .to_str()
+            .ok_or_else(|| anyhow!("invalid ownership path"))?;
+        let base = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+        if name.contains(['\\', ':'])
+            || name.ends_with(['.', ' '])
+            || matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || (base.len() == 4
+                && (base.starts_with("COM") || base.starts_with("LPT"))
+                && matches!(base.as_bytes()[3], b'1'..=b'9'))
+        {
+            return Err(anyhow!("invalid ownership path: {}", path.display()));
+        }
+        parts.push(name);
+    }
+    if parts.is_empty()
+        || parts.iter().any(|name| {
+            let name = name.to_ascii_lowercase();
+            name == OWNERSHIP_FILE
+                || name == ".apocrypha-manifest"
+                || name.starts_with(".apocrypha-install-")
+        })
+    {
+        return Err(anyhow!("invalid ownership path: {}", path.display()));
+    }
+    Ok(parts.join("/").to_lowercase())
+}
+
+fn portable_path(path: &Path) -> Result<String> {
+    path_key(path)?;
+    Ok(path
+        .components()
+        .map(|component| component.as_os_str().to_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("/"))
+}
+
+fn hash_file(path: &Path) -> Result<FileFingerprint> {
+    let mut input = std::fs::File::open(path)?;
+    #[cfg(windows)]
+    let (volume, file_id) = {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+        // The handle remains open for the duration of this call.
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe { GetFileInformationByHandle(input.as_raw_handle() as _, &mut info) } == 0 {
+            return Err(std::io::Error::last_os_error())
+                .context(format!("identifying {}", path.display()));
+        }
+        let id = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+        if id == 0 {
+            return Err(anyhow!(
+                "filesystem did not provide an identity for {}",
+                path.display()
+            ));
+        }
+        (u64::from(info.dwVolumeSerialNumber), id)
+    };
+    #[cfg(unix)]
+    let (volume, file_id) = {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = input.metadata()?;
+        (metadata.dev(), metadata.ino())
+    };
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 65536];
+    loop {
+        let count = input.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(FileFingerprint {
+        sha256: hasher.finalize().into(),
+        volume,
+        file_id,
+    })
+}
+
+// Inspect each component without following destination symlinks.
+fn existing_file(addons_dir: &Path, rel: &Path) -> Result<Option<PathBuf>> {
+    let mut path = addons_dir.to_path_buf();
+    let mut components = rel.components().peekable();
+    while let Some(component) = components.next() {
+        path.push(component);
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if components.peek().is_some() && meta.file_type().is_dir() => {}
+            Ok(meta) if components.peek().is_none() && meta.file_type().is_file() => {
+                return Ok(Some(path))
+            }
+            Ok(_) => {
+                return Err(anyhow!(
+                    "destination is not a regular file or directory: {}",
+                    path.display()
+                ))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(anyhow!("empty destination path"))
+}
+
+fn load_ownership(addons_dir: &Path) -> Result<(Ownership, Option<FileFingerprint>)> {
+    let Some(path) = existing_file(addons_dir, Path::new(OWNERSHIP_FILE))? else {
+        return Ok((Ownership::default(), None));
+    };
+    let contents = std::fs::read(&path)?;
+    let hash = hash_file(&path)?;
+    if hash.sha256 != <[u8; 32]>::from(Sha256::digest(&contents)) {
+        return Err(anyhow!("addon ownership registry changed while reading"));
+    }
+    let ownership: Ownership = serde_json::from_slice(&contents)
+        .context("invalid addon ownership registry; restore it from backup before installing")?;
+    for (key, entry) in &ownership.files {
+        if path_key(Path::new(&entry.path))? != *key || entry.addon_id.is_empty() {
+            return Err(anyhow!("invalid addon ownership registry entry: {key}"));
+        }
+    }
+    Ok((ownership, Some(hash)))
+}
+
+fn conflict(path: &Path, reason: &str) -> anyhow::Error {
+    anyhow!(
+        "cannot change {}: {reason}; back up and move the conflicting file outside AddOns after verifying its owner, then retry",
+        path.display()
+    )
+}
+
+fn extract_zip(bytes: &[u8], addons_dir: &Path, addon_id: &str) -> Result<Vec<String>> {
+    for entry in std::fs::read_dir(addons_dir)? {
+        let entry = entry?;
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .starts_with(".apocrypha-install-")
+        {
+            return Err(anyhow!(
+                "unfinished installation at {}; recover its backup and move the directory outside AddOns before retrying",
+                entry.path().display()
+            ));
+        }
+    }
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
     if archive.len() > 100_000 {
         return Err(anyhow!("archive contains too many entries"));
@@ -216,7 +397,9 @@ fn extract_zip(bytes: &[u8], addons_dir: &Path) -> Result<Vec<String>> {
             || rel.components().any(|c| !matches!(c, Component::Normal(_)))
             || raw_name.split('/').any(|part| {
                 let part = part.to_ascii_lowercase();
-                part == ".apocrypha-manifest" || part.starts_with(".apocrypha-install-")
+                part == OWNERSHIP_FILE
+                    || part == ".apocrypha-manifest"
+                    || part.starts_with(".apocrypha-install-")
             })
         {
             return Err(anyhow!("unsafe zip entry: {raw_name}"));
@@ -275,47 +458,130 @@ fn extract_zip(bytes: &[u8], addons_dir: &Path) -> Result<Vec<String>> {
     if files.is_empty() {
         return Err(anyhow!("archive contains no addon files"));
     }
+    let (mut ownership, registry_hash) = load_ownership(addons_dir)?;
+    let mut incoming = BTreeMap::new();
+    for rel in &files {
+        let key = path_key(rel)?;
+        if incoming.insert(key, rel).is_some() {
+            return Err(anyhow!(
+                "archive contains conflicting file names: {}",
+                rel.display()
+            ));
+        }
+    }
+
+    // Both extensions can be loaded by the game. An unowned alternate must
+    // never be silently left beside the new manifest or removed.
     for root in &root_dirs {
         let txt = PathBuf::from(root).join(format!("{root}.txt"));
         let addon = PathBuf::from(root).join(format!("{root}.addon"));
-        let contains = |path: &Path| {
-            files.iter().any(|file| {
-                file == path
-                    || (cfg!(windows)
-                        && file
-                            .to_string_lossy()
-                            .eq_ignore_ascii_case(&path.to_string_lossy()))
-            })
+        let has_txt = incoming.contains_key(&path_key(&txt)?);
+        let has_addon = incoming.contains_key(&path_key(&addon)?);
+        if has_txt && has_addon {
+            return Err(anyhow!("archive contains both manifests for {root}"));
+        }
+        let alternate = if has_txt {
+            Some(addon)
+        } else if has_addon {
+            Some(txt)
+        } else {
+            None
         };
-        let chosen = match (contains(&txt), contains(&addon)) {
-            (true, _) => Some("txt"),
-            (false, true) => Some("addon"),
-            _ => None,
-        };
-        if let Some(chosen) = chosen {
-            let marker = PathBuf::from(root).join(".apocrypha-manifest");
-            let existing = addons_dir.join(&marker);
-            match std::fs::symlink_metadata(&existing) {
-                Ok(meta) if meta.file_type().is_file() => {
-                    let value = std::fs::read_to_string(&existing)?;
-                    if value != "txt" && value != "addon" {
-                        return Err(anyhow!(
-                            "unrecognized manifest marker: {}",
-                            existing.display()
-                        ));
-                    }
-                }
-                Ok(_) => return Err(anyhow!("invalid manifest marker: {}", existing.display())),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.into()),
+        if let Some(alternate) = alternate {
+            if existing_file(addons_dir, &alternate)?.is_some()
+                && !ownership
+                    .files
+                    .get(&path_key(&alternate)?)
+                    .is_some_and(|entry| {
+                        entry.addon_id == addon_id
+                            && (cfg!(windows) || Path::new(&entry.path) == alternate)
+                    })
+            {
+                return Err(conflict(
+                    &alternate,
+                    "alternate manifest has unknown or different ownership",
+                ));
             }
-            std::fs::write(staged.join(&marker), chosen)?;
-            files.push(marker);
         }
     }
-    files.sort();
+
+    let mut changes = Vec::new();
+    for (key, entry) in &ownership.files {
+        if entry.addon_id != addon_id || incoming.contains_key(key) {
+            continue;
+        }
+        let rel = PathBuf::from(&entry.path);
+        if let Some(path) = existing_file(addons_dir, &rel)? {
+            let current = hash_file(&path)?;
+            if current != entry.fingerprint {
+                return Err(conflict(&rel, "previously installed file was modified"));
+            }
+            changes.push(FileChange {
+                rel,
+                install: false,
+                expected_hash: Some(current),
+            });
+        }
+    }
+    for (key, rel) in &incoming {
+        let previous = ownership.files.get(key);
+        let current = existing_file(addons_dir, rel)?
+            .map(|path| hash_file(&path))
+            .transpose()?;
+        if let Some(entry) = previous {
+            if entry.addon_id != addon_id && current.is_some() {
+                return Err(conflict(rel, "file belongs to another addon"));
+            }
+            if !cfg!(windows)
+                && entry.path != portable_path(rel)?
+                && existing_file(addons_dir, Path::new(&entry.path))?.is_some()
+            {
+                return Err(conflict(
+                    rel,
+                    "file name differs only by case from an owned file",
+                ));
+            }
+        }
+        if let Some(hash) = &current {
+            match previous {
+                None => return Err(conflict(rel, "file ownership is unknown")),
+                Some(entry) if &entry.fingerprint != hash => {
+                    return Err(conflict(rel, "previously installed file was modified"))
+                }
+                _ => {}
+            }
+        }
+        changes.push(FileChange {
+            rel: (*rel).clone(),
+            install: true,
+            expected_hash: current,
+        });
+    }
+    ownership
+        .files
+        .retain(|_, entry| entry.addon_id != addon_id);
+    for (key, rel) in incoming {
+        ownership.files.insert(
+            key,
+            OwnedFile {
+                path: portable_path(rel)?,
+                addon_id: addon_id.to_string(),
+                fingerprint: hash_file(&staged.join(rel))?,
+            },
+        );
+    }
+    std::fs::write(staged.join(OWNERSHIP_FILE), serde_json::to_vec(&ownership)?)?;
+    changes.push(FileChange {
+        rel: PathBuf::from(OWNERSHIP_FILE),
+        install: true,
+        expected_hash: registry_hash,
+    });
+    std::fs::write(
+        work.path().join("journal.json"),
+        serde_json::to_vec(&changes)?,
+    )?;
     if let Err((error, rollback_failed)) =
-        replace_files(addons_dir, &staged, &backup, &files, |from, to| {
+        replace_files(addons_dir, &staged, &backup, &changes, |from, to| {
             std::fs::rename(from, to)
         })
     {
@@ -341,7 +607,7 @@ fn replace_files<F>(
     addons_dir: &Path,
     staged: &Path,
     backup: &Path,
-    files: &[PathBuf],
+    files: &[FileChange],
     mut rename: F,
 ) -> std::result::Result<(), (anyhow::Error, bool)>
 where
@@ -350,7 +616,8 @@ where
     let mut changed: Vec<(PathBuf, bool, bool)> = Vec::new();
     let mut created_dirs = Vec::new();
     let result = (|| -> Result<()> {
-        for rel in files {
+        for change in files {
+            let rel = &change.rel;
             let mut parent = addons_dir.to_path_buf();
             for component in rel.parent().unwrap().components() {
                 parent.push(component);
@@ -381,6 +648,14 @@ where
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
                 Err(e) => return Err(e.into()),
             };
+            let actual_hash = if existed {
+                Some(hash_file(&target)?)
+            } else {
+                None
+            };
+            if actual_hash != change.expected_hash {
+                return Err(conflict(rel, "file changed during installation"));
+            }
             if existed {
                 let saved = backup.join(rel);
                 std::fs::create_dir_all(saved.parent().unwrap())?;
@@ -388,9 +663,11 @@ where
                     .with_context(|| format!("backing up {}", target.display()))?;
             }
             changed.push((rel.clone(), existed, false));
-            rename(&staged.join(rel), &target)
-                .with_context(|| format!("installing {}", target.display()))?;
-            changed.last_mut().unwrap().2 = true;
+            if change.install {
+                rename(&staged.join(rel), &target)
+                    .with_context(|| format!("installing {}", target.display()))?;
+                changed.last_mut().unwrap().2 = true;
+            }
         }
         Ok(())
     })();
@@ -794,31 +1071,47 @@ mod tests {
         Ok(())
     }
 
+    fn archive(files: &[(&str, &[u8])]) -> Result<Vec<u8>> {
+        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in files {
+            archive.start_file(*name, SimpleFileOptions::default())?;
+            archive.write_all(data)?;
+        }
+        Ok(archive.finish()?.into_inner())
+    }
+
     #[test]
-    fn extraction_preserves_shared_files_and_selects_new_manifest() -> Result<()> {
+    fn owned_updates_remove_obsolete_manifest_and_preserve_shared_files() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let addons = temp.path().join("AddOns");
-        std::fs::create_dir_all(addons.join("Example"))?;
-        std::fs::write(addons.join("Example/Example.txt"), "old manifest")?;
-        std::fs::write(addons.join("Example/shared.txt"), "other addon")?;
-        std::fs::create_dir_all(addons.join("gamedata"))?;
-        std::fs::write(addons.join("gamedata/other.txt"), "other addon")?;
-        std::fs::write(addons.join("gamedata/current.txt"), "old")?;
-
-        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        let options =
-            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-        archive.start_file("Example/Example.addon", options)?;
-        archive.write_all(b"new")?;
-        archive.start_file("gamedata/current.txt", options)?;
-        archive.write_all(b"updated")?;
-        let bytes = archive.finish()?.into_inner();
-
-        assert_eq!(extract_zip(&bytes, &addons)?, vec!["Example", "gamedata"]);
-        assert_eq!(
-            std::fs::read(addons.join("Example/Example.txt"))?,
-            b"old manifest"
-        );
+        std::fs::create_dir(&addons)?;
+        extract_zip(
+            &archive(&[
+                ("Example/Example.txt", b"old manifest"),
+                ("gamedata/current.txt", b"old"),
+                ("Example/obsolete.lua", b"obsolete"),
+            ])?,
+            &addons,
+            "1",
+        )?;
+        extract_zip(
+            &archive(&[
+                ("Example/shared.txt", b"other addon"),
+                ("gamedata/other.txt", b"other addon"),
+            ])?,
+            &addons,
+            "2",
+        )?;
+        extract_zip(
+            &archive(&[
+                ("Example/Example.addon", b"new"),
+                ("gamedata/current.txt", b"updated"),
+            ])?,
+            &addons,
+            "1",
+        )?;
+        assert!(!addons.join("Example/Example.txt").exists());
+        assert!(!addons.join("Example/obsolete.lua").exists());
         assert_eq!(
             std::fs::read(addons.join("Example/shared.txt"))?,
             b"other addon"
@@ -836,15 +1129,208 @@ mod tests {
             scanner::locate_manifest(&addons.join("Example"), "Example"),
             Some(addons.join("Example/Example.addon"))
         );
-        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        archive.start_file("Example/Example.txt", SimpleFileOptions::default())?;
-        archive.write_all(b"newer")?;
-        extract_zip(&archive.finish()?.into_inner(), &addons)?;
+        extract_zip(
+            &archive(&[("Example/Example.txt", b"newer")])?,
+            &addons,
+            "1",
+        )?;
         assert_eq!(
             scanner::locate_manifest(&addons.join("Example"), "Example"),
             Some(addons.join("Example/Example.txt"))
         );
-        assert_eq!(std::fs::read(addons.join("Example/Example.addon"))?, b"new");
+        assert!(!addons.join("Example/Example.addon").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_other_addon_and_legacy_conflicts_before_any_changes() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addons = temp.path();
+        extract_zip(&archive(&[("shared/file", b"owner")])?, addons, "owner")?;
+        std::fs::write(addons.join("shared/manual"), "manual")?;
+        for (name, reason) in [
+            ("shared/file", "another addon"),
+            ("shared/manual", "ownership is unknown"),
+        ] {
+            let error = extract_zip(
+                &archive(&[("shared/new", b"new"), (name, b"overwrite")])?,
+                addons,
+                "other",
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(reason), "{error}");
+            assert!(!addons.join("shared/new").exists());
+        }
+        assert_eq!(std::fs::read(addons.join("shared/file"))?, b"owner");
+        assert_eq!(std::fs::read(addons.join("shared/manual"))?, b"manual");
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_unknown_or_other_owner_alternate_manifest() -> Result<()> {
+        for owned_by_other in [false, true] {
+            let temp = tempfile::tempdir()?;
+            let addons = temp.path();
+            if owned_by_other {
+                extract_zip(
+                    &archive(&[("Example/Example.txt", b"original")])?,
+                    addons,
+                    "other",
+                )?;
+            } else {
+                std::fs::create_dir(addons.join("Example"))?;
+                std::fs::write(addons.join("Example/Example.txt"), b"original")?;
+            }
+            let err = extract_zip(
+                &archive(&[("Example/Example.addon", b"new")])?,
+                addons,
+                "new",
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("alternate manifest"), "{err}");
+            assert_eq!(
+                std::fs::read(addons.join("Example/Example.txt"))?,
+                b"original"
+            );
+            assert!(!addons.join("Example/Example.addon").exists());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_archives_with_both_manifest_extensions() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let bytes = archive(&[
+            ("Example/Example.txt", b"txt"),
+            ("Example/Example.addon", b"addon"),
+        ])?;
+        let error = extract_zip(&bytes, temp.path(), "1")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("both manifests"), "{error}");
+        assert!(!temp.path().join("Example").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_modified_owned_file_and_corrupt_registry() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addons = temp.path();
+        extract_zip(&archive(&[("Example/file", b"original")])?, addons, "1")?;
+        std::fs::write(addons.join("Example/file"), b"edited")?;
+        let err = extract_zip(&archive(&[("Example/file", b"new")])?, addons, "1")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("modified"), "{err}");
+        assert_eq!(std::fs::read(addons.join("Example/file"))?, b"edited");
+        std::fs::write(addons.join(OWNERSHIP_FILE), b"invalid")?;
+        assert!(extract_zip(&archive(&[("Example/other", b"new")])?, addons, "1").is_err());
+        assert!(!addons.join("Example/other").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_recreated_file_even_when_content_matches() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addons = temp.path();
+        extract_zip(&archive(&[("Example/file", b"original")])?, addons, "1")?;
+        std::fs::rename(addons.join("Example/file"), addons.join("original-backup"))?;
+        std::fs::write(addons.join("Example/file"), b"original")?;
+        let err = extract_zip(&archive(&[("Example/file", b"new")])?, addons, "1")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("modified"), "{err}");
+        assert_eq!(std::fs::read(addons.join("Example/file"))?, b"original");
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_modified_obsolete_manifest_and_unfinished_recovery() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addons = temp.path();
+        extract_zip(
+            &archive(&[("Example/Example.txt", b"original")])?,
+            addons,
+            "1",
+        )?;
+        std::fs::write(addons.join("Example/Example.txt"), b"modified")?;
+        let bytes = archive(&[("Example/Example.addon", b"new")])?;
+        assert!(extract_zip(&bytes, addons, "1")
+            .unwrap_err()
+            .to_string()
+            .contains("modified"));
+        assert_eq!(
+            std::fs::read(addons.join("Example/Example.txt"))?,
+            b"modified"
+        );
+        assert!(!addons.join("Example/Example.addon").exists());
+        std::fs::create_dir(addons.join(".apocrypha-install-recovery"))?;
+        assert!(extract_zip(&bytes, addons, "1")
+            .unwrap_err()
+            .to_string()
+            .contains("unfinished installation"));
+        Ok(())
+    }
+
+    #[test]
+    fn file_claim_can_transfer_only_after_old_file_is_moved() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addons = temp.path().join("AddOns");
+        std::fs::create_dir(&addons)?;
+        extract_zip(&archive(&[("shared/file", b"owner")])?, &addons, "owner")?;
+        let bytes = archive(&[("shared/file", b"other")])?;
+        assert!(extract_zip(&bytes, &addons, "other").is_err());
+        std::fs::rename(addons.join("shared/file"), temp.path().join("owner-backup"))?;
+        extract_zip(&bytes, &addons, "other")?;
+        assert_eq!(std::fs::read(temp.path().join("owner-backup"))?, b"owner");
+        assert_eq!(std::fs::read(addons.join("shared/file"))?, b"other");
+        assert!(extract_zip(
+            &archive(&[("shared/file", b"overwrite")])?,
+            &addons,
+            "owner"
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn restores_removed_manifest_when_replacement_fails() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let addons = temp.path().join("addons");
+        let stage = temp.path().join("stage");
+        let backup = temp.path().join("backup");
+        for dir in [&addons, &stage, &backup] {
+            std::fs::create_dir(dir)?;
+        }
+        std::fs::write(addons.join("old.txt"), "old")?;
+        std::fs::write(stage.join("new.addon"), "new")?;
+        let changes = [
+            FileChange {
+                rel: "old.txt".into(),
+                install: false,
+                expected_hash: Some(hash_file(&addons.join("old.txt"))?),
+            },
+            FileChange {
+                rel: "new.addon".into(),
+                install: true,
+                expected_hash: None,
+            },
+        ];
+        let mut calls = 0;
+        let (_, rollback_failed) = replace_files(&addons, &stage, &backup, &changes, |from, to| {
+            calls += 1;
+            if calls == 2 {
+                Err(std::io::Error::other("injected failure"))
+            } else {
+                std::fs::rename(from, to)
+            }
+        })
+        .unwrap_err();
+        assert!(!rollback_failed);
+        assert_eq!(std::fs::read(addons.join("old.txt"))?, b"old");
+        assert!(!addons.join("new.addon").exists());
         Ok(())
     }
 
@@ -866,7 +1352,7 @@ mod tests {
             archive.write_all(b"new")?;
             archive.start_file(unsafe_name, options)?;
             archive.write_all(b"unsafe")?;
-            assert!(extract_zip(&archive.finish()?.into_inner(), addons).is_err());
+            assert!(extract_zip(&archive.finish()?.into_inner(), addons, "1").is_err());
             assert_eq!(std::fs::read(addons.join("Example/file.txt"))?, b"old");
         }
         let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -878,13 +1364,13 @@ mod tests {
         let mut bytes = archive.finish()?.into_inner();
         let offset = bytes.windows(3).position(|w| w == b"new").unwrap();
         bytes[offset] ^= 0xff;
-        assert!(extract_zip(&bytes, addons).is_err());
+        assert!(extract_zip(&bytes, addons, "1").is_err());
         assert_eq!(std::fs::read(addons.join("Example/file.txt"))?, b"old");
         Ok(())
     }
 
     #[test]
-    fn destination_conflict_rolls_back_earlier_replacement() -> Result<()> {
+    fn destination_conflict_leaves_files_untouched() -> Result<()> {
         let temp = tempfile::tempdir()?;
         std::fs::create_dir(temp.path().join("Example"))?;
         std::fs::write(temp.path().join("Example/a"), "old")?;
@@ -894,7 +1380,7 @@ mod tests {
             archive.start_file(name, SimpleFileOptions::default())?;
             archive.write_all(b"new")?;
         }
-        assert!(extract_zip(&archive.finish()?.into_inner(), temp.path()).is_err());
+        assert!(extract_zip(&archive.finish()?.into_inner(), temp.path(), "1").is_err());
         assert_eq!(std::fs::read(temp.path().join("Example/a"))?, b"old");
         assert!(temp.path().join("Example/b").is_dir());
         Ok(())
@@ -913,7 +1399,7 @@ mod tests {
         let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
         archive.start_file("Example/file", SimpleFileOptions::default())?;
         archive.write_all(b"new")?;
-        assert!(extract_zip(&archive.finish()?.into_inner(), &addons).is_err());
+        assert!(extract_zip(&archive.finish()?.into_inner(), &addons, "1").is_err());
         assert_eq!(std::fs::read(outside.join("file"))?, b"old");
         Ok(())
     }
@@ -936,7 +1422,18 @@ mod tests {
             &addons,
             &stage,
             &backup,
-            &["a".into(), "b".into()],
+            &[
+                FileChange {
+                    rel: "a".into(),
+                    install: true,
+                    expected_hash: Some(hash_file(&addons.join("a"))?),
+                },
+                FileChange {
+                    rel: "b".into(),
+                    install: true,
+                    expected_hash: Some(hash_file(&addons.join("b"))?),
+                },
+            ],
             |from, to| {
                 calls += 1;
                 if calls == 4 {
@@ -966,16 +1463,25 @@ mod tests {
         std::fs::write(addons.join("a"), "old")?;
         std::fs::write(stage.join("a"), "new")?;
         let mut calls = 0;
-        let (error, rollback_failed) =
-            replace_files(&addons, &stage, &backup, &["a".into()], |from, to| {
+        let (error, rollback_failed) = replace_files(
+            &addons,
+            &stage,
+            &backup,
+            &[FileChange {
+                rel: "a".into(),
+                install: true,
+                expected_hash: Some(hash_file(&addons.join("a"))?),
+            }],
+            |from, to| {
                 calls += 1;
                 if calls >= 2 {
                     Err(std::io::Error::other("injected failure"))
                 } else {
                     std::fs::rename(from, to)
                 }
-            })
-            .unwrap_err();
+            },
+        )
+        .unwrap_err();
         assert!(rollback_failed);
         assert!(error.to_string().contains("rollback errors"));
         assert_eq!(std::fs::read(backup.join("a"))?, b"old");

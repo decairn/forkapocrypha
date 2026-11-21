@@ -60,6 +60,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "sysinfo",
  "tauri",
  "tauri-build",
@@ -72,6 +73,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "windows-sys 0.61.2",
  "zip",
 ]
 

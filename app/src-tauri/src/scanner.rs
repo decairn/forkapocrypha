@@ -78,16 +78,6 @@ pub fn scan(addons_dir: &Path) -> Result<Vec<InstalledAddon>> {
 pub(crate) fn locate_manifest(dir: &Path, name: &str) -> Option<PathBuf> {
     let txt = dir.join(format!("{}.txt", name));
     let addon = dir.join(format!("{}.addon", name));
-    if let Ok(marker) = std::fs::read_to_string(dir.join(".apocrypha-manifest")) {
-        let preferred = match marker.as_str() {
-            "txt" => Some(&txt),
-            "addon" => Some(&addon),
-            _ => None,
-        };
-        if let Some(path) = preferred.filter(|path| path.exists()) {
-            return Some(path.clone());
-        }
-    }
     if txt.exists() {
         return Some(txt);
     }

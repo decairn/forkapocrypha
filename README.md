@@ -57,6 +57,31 @@ After the first install, Apocrypha can update itself: open **Settings → App Up
 - **Self-updating app** via the built-in Tauri Updater
 - **OneDrive-aware** — automatically finds your AddOns folder even when Documents is redirected
 
+### Install conflicts and migration
+
+Apocrypha records the owner, filesystem identity, and content hash of each file it installs in
+`AddOns/.apocrypha-ownership.json`. Updates replace or remove only unchanged
+files owned by that addon; a conflicting file owned by another addon, an
+untracked file, or a modified file stops the install. This also applies to an
+old `.txt` or `.addon` manifest: it must be safely removed before the other
+extension is installed so the game cannot load both.
+
+Existing manual installs and installs from older versions have no per-file
+ownership record and are not automatically adopted. When an install reports a
+conflict, verify the file's owner, back it up and move it outside AddOns before
+retrying; moving another addon's files can break that addon. Keep the ownership
+registry with your AddOns folder: if it is lost, existing files become
+untracked. Copying files to a different filesystem or recreating them changes
+their identity and requires the same manual conflict resolution. Files not
+previously recorded are not automatically cleaned up.
+If an interrupted install or failed rollback leaves a hidden
+`.apocrypha-install-*` directory, recover its `backup` files first, then move
+that directory outside AddOns before retrying. Its `journal.json` lists affected
+paths, whether a new file was planned, and whether an old file existed; use it
+to review newly created files as well as restoring backups. Dependency errors can still
+leave earlier addon installations in place. Do not modify addons with another
+program while an install is running.
+
 ---
 
 ## Why this exists
