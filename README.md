@@ -46,7 +46,7 @@ After the first install, Apocrypha can update itself: open **Settings → App Up
 
 ## What it does
 
-- **Browse the full ESOUI catalog** (~6,000 addons) with live search, sort, category filter, and pagination
+- **Browse the full ESOUI catalog** (~3,400 addons) with live search, sort, category filter, and pagination
 - **One-click install** with **recursive dependency resolution** — LibStub, LibAddonMenu-2.0, LibCustomMenu, LibAsync and friends are pulled in automatically without asking
 - Required dependency minimums are checked against the installed manifest's `AddOnVersion`. If a dependency is too old or its version cannot be verified, installation reports an error and may be partial; update the dependency and retry.
 - **Update, uninstall, and bulk Update All** — re-uses the same staged install pipeline, including manifest renames (`.txt` → `.addon`)
@@ -141,7 +141,7 @@ npm install
 npm run tauri dev
 ```
 
-The first run compiles ~500 Rust crates (Tauri, wry, tao, webview2-com, …) — expect **~3–4 minutes**. Subsequent runs are seconds.
+The first run on Windows compiles ~300 Rust crates (Tauri, wry, tao, webview2-com, …) — expect **~3–4 minutes**. Subsequent runs are seconds.
 
 Production build:
 

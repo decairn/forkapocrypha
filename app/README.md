@@ -16,7 +16,7 @@ npm install
 npm run tauri dev
 ```
 
-First run compiles ~500 Rust crates (3–4 minutes); subsequent runs are
+On Windows, the first run compiles ~300 Rust crates (3–4 minutes). Subsequent runs are
 fast.
 
 ## Production build
