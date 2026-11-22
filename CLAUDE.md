@@ -187,36 +187,11 @@ endgame, just dearer and requires a hardware token or HSM.
 
 ### Tauri Updater (auto-update of the app itself)
 
-**Status:** wired (plugin registered, UI in Settings → App Updates), but
-currently signed by a **dev keypair** that lives in `app/secrets/` and is
-git-ignored. The endpoint in `tauri.conf.json` points at a GitHub Release
-URL that doesn't exist yet — `check()` will silently fail in this state.
-
-To activate updates for a public release:
-
-1. **Push the repo to GitHub** under the owner referenced in
-   `tauri.conf.json::plugins.updater.endpoints`. Adjust the URL if the
-   owner/repo name changes.
-2. **Decide the signing identity.** The dev keypair in `app/secrets/` is
-   fine for testing but anyone with repo access could sign rogue updates
-   if they re-create it from history. For real releases generate a fresh
-   one with a password:
-   ```powershell
-   npx @tauri-apps/cli signer generate -w prod.key
-   ```
-   Copy the contents of `prod.key.pub` into
-   `app/src-tauri/tauri.conf.json::plugins.updater.pubkey`. Store the
-   `prod.key` file privately (1Password, vault, etc).
-3. **Add GitHub Secrets** to the repo:
-   - `TAURI_SIGNING_PRIVATE_KEY` — full contents of `prod.key`.
-   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the password chosen in step 2.
-4. **Extend `.github/workflows/build.yml`** so the `npm run tauri build`
-   step receives those secrets as env vars. Tauri picks them up
-   automatically and signs the bundles. Also publish `latest.json` (Tauri
-   build emits it) to a GitHub Release tagged `vX.Y.Z` whose
-   `releases/latest/download/latest.json` URL matches the endpoint.
-5. **Bump `version`** in both `package.json` and `tauri.conf.json` and
-   create a new release whenever you ship.
+Use `npm run tauri` so `app/scripts/tauri.mjs` adds the distribution's
+updater configuration to the Tauri build. Vite uses the same distribution
+configuration for Settings → About. The release workflow signs updater
+artifacts and attaches `latest.json` to the draft release. See
+[Publishing from a fork](README.md#publishing-from-a-fork) for signing setup.
 
 Code signing the MSI itself (the SmartScreen warning) is a separate
 concern — that's the Azure Trusted Signing path above and is unrelated

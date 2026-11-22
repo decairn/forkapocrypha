@@ -43,9 +43,7 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERGRDhEQzk0NjdCRDU2MzIKUldReVZyMW5sTnpZMzJUdmVndlNvcjdqKzNJRDBtVFkvMUJkbDNIeGNhUFJod1ppVDdhZi82RHAK",
-      "endpoints": [
-        "https://github.com/VitorTaichou/apocrypha/releases/latest/download/latest.json"
-      ]
+      "endpoints": []
     }
   }
 }

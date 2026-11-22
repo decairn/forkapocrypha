@@ -212,7 +212,7 @@ export function SettingsPage({
 
         <SettingSection
           title="App Updates"
-          description="Apocrypha can update itself from the official release feed."
+          description="Apocrypha checks for updates from this distribution’s release feed."
         >
           <UpdaterPanel />
         </SettingSection>
@@ -223,13 +223,19 @@ export function SettingsPage({
             <p className="text-sm text-[var(--color-outline)]">
               Built with Tauri 2, Rust, React, and Tailwind.
             </p>
-            <button
-              onClick={() => openUrl("https://github.com/VitorTaichou/apocrypha").catch(() => {})}
-              className="inline-flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-low)] px-3.5 py-1.5 text-xs font-medium text-[var(--color-on-surface-variant)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]"
-            >
-              <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} />
-              View on GitHub
-            </button>
+            <div className="flex flex-wrap gap-2">
+              {__ABOUT_LINKS__.map(({ url, label }) => (
+                <button
+                  key={url}
+                  type="button"
+                  onClick={() => openUrl(url).catch(() => {})}
+                  className="inline-flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-low)] px-3.5 py-1.5 text-xs font-medium text-[var(--color-on-surface-variant)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                >
+                  <ExternalLink aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
         </SettingSection>
       </div>
