@@ -5,7 +5,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { AutoUpdatePanel } from "@/components/AutoUpdatePanel";
 import { PageHeader } from "@/components/PageHeader";
 import { SnapshotsManager } from "@/components/SnapshotsManager";
-import { UpdaterPanel } from "@/components/UpdaterPanel";
 import { WindowBehaviorPanel } from "@/components/WindowBehaviorPanel";
 import { api } from "@/lib/api";
 import type { CatalogMeta } from "@/lib/types";
@@ -18,7 +17,7 @@ function SettingSection({
   children,
 }: {
   title: string;
-  description: string;
+  description?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -28,7 +27,9 @@ function SettingSection({
           <h2 className="text-sm font-medium uppercase tracking-[0.14em] text-[var(--color-on-surface)]">
             {title}
           </h2>
-          <p className="mt-2 text-sm text-[var(--color-on-surface-variant)]">{description}</p>
+          {description && (
+            <p className="mt-2 text-sm text-[var(--color-on-surface-variant)]">{description}</p>
+          )}
         </div>
         <div className="space-y-3">{children}</div>
       </div>
@@ -210,11 +211,10 @@ export function SettingsPage({
           <WindowBehaviorPanel />
         </SettingSection>
 
-        <SettingSection
-          title="App Updates"
-          description="Apocrypha can update itself from the release feed."
-        >
-          <UpdaterPanel />
+        <SettingSection title="App Updates">
+          <span className="inline-flex rounded-full border border-outline-variant bg-surface-low px-2.5 py-1 text-xs font-medium text-on-surface-variant">
+            Disabled
+          </span>
         </SettingSection>
 
         <SettingSection title="About" description="Version, links, and credits.">
