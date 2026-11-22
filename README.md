@@ -6,13 +6,12 @@
 
 Fast. Lightweight. Beautifully dark.
 
-[**Download**](https://github.com/VitorTaichou/apocrypha/releases/latest) ·
-[Report a bug](https://github.com/VitorTaichou/apocrypha/issues) ·
-[Discussions](https://github.com/VitorTaichou/apocrypha/discussions)
+[**Download**](https://github.com/decairn/forkapocrypha/releases/latest) ·
+[Report a bug](https://github.com/decairn/forkapocrypha/issues)
 
-[![build](https://github.com/VitorTaichou/apocrypha/actions/workflows/build.yml/badge.svg)](https://github.com/VitorTaichou/apocrypha/actions/workflows/build.yml)
-[![release](https://img.shields.io/github/v/release/VitorTaichou/apocrypha?label=release)](https://github.com/VitorTaichou/apocrypha/releases/latest)
-[![platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-67D9CA)](https://github.com/VitorTaichou/apocrypha/releases/latest)
+[![build](https://github.com/decairn/forkapocrypha/actions/workflows/build.yml/badge.svg?branch=dev)](https://github.com/decairn/forkapocrypha/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/decairn/forkapocrypha?label=release)](https://github.com/decairn/forkapocrypha/releases/latest)
+[![platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-67D9CA)](https://github.com/decairn/forkapocrypha/releases/latest)
 
 </div>
 
@@ -22,7 +21,7 @@ Fast. Lightweight. Beautifully dark.
 
 ### Windows
 
-1. Download **`Apocrypha_X.Y.Z_x64_en-US.msi`** from the [latest release](https://github.com/VitorTaichou/apocrypha/releases/latest).
+1. Download **`Apocrypha_X.Y.Z_x64_en-US.msi`** from the [latest release](https://github.com/decairn/forkapocrypha/releases/latest).
 2. Double-click to install.
 3. On first launch, Windows SmartScreen shows **"Windows protected your PC"** — click **More info** → **Run anyway**.
    - The build isn't code-signed yet (signing certificates cost money; this is a hobby project). It's not a virus warning — the source is right here for anyone who wants to read it.
@@ -30,7 +29,7 @@ Fast. Lightweight. Beautifully dark.
 
 ### Linux
 
-1. Download **`Apocrypha_X.Y.Z_amd64.AppImage`** from the [latest release](https://github.com/VitorTaichou/apocrypha/releases/latest).
+1. Download **`Apocrypha_X.Y.Z_amd64.AppImage`** from the [latest release](https://github.com/decairn/forkapocrypha/releases/latest).
 2. Make it executable and run:
 
    ```bash
@@ -38,9 +37,9 @@ Fast. Lightweight. Beautifully dark.
    ./Apocrypha_*.AppImage
    ```
 
-### Self-update
+### Updating Apocrypha
 
-After the first install, Apocrypha can update itself: open **Settings → App Updates → Check now**. Future versions ship via the same channel, no need to come back here.
+The v1.0.0 installers require manual updates. To upgrade, download and install the [latest release](https://github.com/decairn/forkapocrypha/releases/latest).
 
 ---
 
@@ -135,8 +134,8 @@ Use Node.js 22.18 or later in the 22.x line, 24.11 or later in 24.x,
 or 26 or later.
 
 ```bash
-git clone https://github.com/VitorTaichou/apocrypha
-cd apocrypha/app
+git clone https://github.com/decairn/forkapocrypha.git
+cd forkapocrypha/app
 npm install
 npm run tauri dev
 ```
@@ -191,9 +190,9 @@ For the full architecture overview — module layout, IPC contracts, design toke
 
 ## Contributing
 
-PRs welcome. Development happens on **`dev`**; **`main`** is the release branch (tagged commits cut releases via the workflow at `.github/workflows/release.yml`). See [CLAUDE.md](CLAUDE.md) > Branching & releases for the full flow.
+PRs welcome. Development happens on **`dev`**; **`main`** is the release branch (tagged commits cut releases via the [release workflow](.github/workflows/release.yml)). See [CLAUDE.md](CLAUDE.md) > Branching & releases for the full flow.
 
-If you find an addon that doesn't install or update correctly, [open an issue](https://github.com/VitorTaichou/apocrypha/issues/new) with the addon name and what you saw — extra points for a screenshot or DevTools console snippet.
+If you find an addon that doesn't install or update correctly, [open an issue](https://github.com/decairn/forkapocrypha/issues/new) with the addon name and what you saw — extra points for a screenshot or DevTools console snippet.
 
 ---
 
