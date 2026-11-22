@@ -250,8 +250,8 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
   }, [selectedCatalogAddon, currentSelectedInstalled, uninstalling, updatingCatalogIds]);
 
   return (
-    <div className="flex h-full">
-      <div className="flex min-w-0 flex-1 flex-col">
+    <div className="relative flex h-full">
+      <div className="flex min-w-0 flex-1 flex-col has-[+aside[data-expanded]]:invisible">
         <PageHeader
           title="Installed"
           subtitle={

@@ -7,6 +7,7 @@ import {
   Heart,
   Loader2,
   Maximize2,
+  Minimize2,
   Trash2,
   X,
 } from "lucide-react";
@@ -40,9 +41,11 @@ interface AddonDetailPanelProps {
 }
 
 const WIDTH_STORAGE_KEY = "apocrypha:detail-panel-width";
+const EXPANDED_STORAGE_KEY = "apocrypha:detail-panel-expanded";
 const DEFAULT_WIDTH = 440;
 const MIN_WIDTH = 320;
 const MAX_WIDTH_PERCENT = 0.65;
+const PANEL_BUTTON_CLASS = "rounded-md bg-[var(--color-surface)]/90 p-1.5 text-[var(--color-on-surface-variant)] backdrop-blur-sm hover:bg-[var(--color-surface)] hover:text-[var(--color-on-surface)] focus-visible:outline-2 focus-visible:outline-[var(--color-primary)]";
 
 function readStoredWidth(): number {
   if (typeof window === "undefined") return DEFAULT_WIDTH;
@@ -54,17 +57,6 @@ function readStoredWidth(): number {
 
 function useDetailPanelWidth() {
   const [width, setWidth] = useState(readStoredWidth);
-
-  // Clamp on window resize so the panel never exceeds the new viewport.
-  useEffect(() => {
-    function clamp() {
-      const max = Math.floor(window.innerWidth * MAX_WIDTH_PERCENT);
-      setWidth((current) => Math.min(Math.max(current, MIN_WIDTH), max));
-    }
-    clamp();
-    window.addEventListener("resize", clamp);
-    return () => window.removeEventListener("resize", clamp);
-  }, []);
 
   const setAndPersist = useCallback((next: number) => {
     const max = Math.floor(window.innerWidth * MAX_WIDTH_PERCENT);
@@ -201,7 +193,7 @@ function HeroImage({ addon, onExpand }: { addon: Addon; onExpand: () => void }) 
         className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
       />
       <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-[var(--color-surface)]/80" />
-      <span className="absolute right-3 top-3 rounded-md bg-[var(--color-surface)]/80 p-1.5 text-[var(--color-on-surface-variant)] opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
+      <span className="absolute bottom-3 right-3 rounded-md bg-[var(--color-surface)]/80 p-1.5 text-[var(--color-on-surface-variant)] opacity-0 backdrop-blur-sm transition-opacity group-focus-visible:opacity-100 group-hover:opacity-100">
         <Maximize2 className="h-3.5 w-3.5" strokeWidth={1.75} />
       </span>
     </button>
@@ -357,6 +349,9 @@ export function AddonDetailPanel({
   const [detailsError, setDetailsError] = useState<string | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [panelWidth, setPanelWidth] = useDetailPanelWidth();
+  const [expanded, setExpanded] = useState(
+    () => typeof window !== "undefined" && window.localStorage.getItem(EXPANDED_STORAGE_KEY) === "true",
+  );
 
   useEffect(() => {
     setDetails(null);
@@ -395,29 +390,47 @@ export function AddonDetailPanel({
   const description = details?.description ?? "";
   const changelog = details?.changelog ?? "";
   const galleryImages = addon.images;
+  const resizeLabel = expanded ? "Restore addon details width" : "Expand addon details";
+  const ResizeIcon = expanded ? Minimize2 : Maximize2;
 
   return (
     <>
       <aside
-        className="relative flex h-full shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface-lowest)]"
-        style={{ width: `${panelWidth}px` }}
+        data-expanded={expanded ? "" : undefined}
+        className={`flex h-full shrink-0 flex-col bg-[var(--color-surface-lowest)] ${
+          expanded ? "absolute inset-0 z-10" : "relative border-l border-[var(--color-border)]"
+        }`}
+        style={expanded ? undefined : {
+          width: Math.max(panelWidth, MIN_WIDTH),
+          maxWidth: `${MAX_WIDTH_PERCENT * 100}vw`,
+        }}
       >
-        <ResizeHandle onResize={setPanelWidth} />
+        {!expanded && <ResizeHandle onResize={setPanelWidth} />}
 
-        <div className="flex-1 overflow-y-auto">
-          <div className="relative">
-            <HeroImage
-              addon={addon}
-              onExpand={() => galleryImages.length > 0 && setLightboxIndex(0)}
-            />
-            <button
-              onClick={onClose}
-              aria-label="Close"
-              className="absolute right-3 top-3 rounded-md bg-[var(--color-surface)]/70 p-1.5 text-[var(--color-on-surface-variant)] backdrop-blur-sm hover:bg-[var(--color-surface)] hover:text-[var(--color-on-surface)]"
-            >
-              <X className="h-4 w-4" strokeWidth={2} />
-            </button>
-          </div>
+        <div className="absolute right-5 top-3 z-20 flex gap-1">
+          <button
+            type="button"
+            onClick={() => {
+              const next = !expanded;
+              setExpanded(next);
+              window.localStorage.setItem(EXPANDED_STORAGE_KEY, String(next));
+            }}
+            aria-label={resizeLabel}
+            title={resizeLabel}
+            className={PANEL_BUTTON_CLASS}
+          >
+            <ResizeIcon className="h-4 w-4" strokeWidth={2} />
+          </button>
+          <button type="button" onClick={onClose} aria-label="Close" className={PANEL_BUTTON_CLASS}>
+            <X className="h-4 w-4" strokeWidth={2} />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto scroll-pt-14">
+          <HeroImage
+            addon={addon}
+            onExpand={() => galleryImages.length > 0 && setLightboxIndex(0)}
+          />
 
           <div className="px-6 pt-4">
             <div className="flex items-start gap-2">

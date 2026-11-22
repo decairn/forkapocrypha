@@ -262,8 +262,8 @@ export function SearchPage({ onInstall, onUninstall }: {
     : null;
 
   return (
-    <div className="flex h-full">
-      <div className="@container flex min-w-0 flex-1 flex-col">
+    <div className="relative flex h-full">
+      <div className="@container flex min-w-0 flex-1 flex-col has-[+aside[data-expanded]]:invisible">
         <PageHeader
           title="Search"
           subtitle={
