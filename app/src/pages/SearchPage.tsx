@@ -328,7 +328,7 @@ export function SearchPage({ onInstall, onUninstall }: {
           </div>
         ) : null}
 
-        <div className="flex-1 overflow-y-auto px-10 py-6">
+        <div className="flex-1 overflow-y-auto px-4 py-6 @2xl:px-10">
           {searchError ? (
             <CenteredState title="Something went wrong." subtitle={searchError} tone="error" />
           ) : showLoading ? (
@@ -349,7 +349,7 @@ export function SearchPage({ onInstall, onUninstall }: {
             />
           ) : (
             <>
-              <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-lowest)]">
+              <div className="@container/addon-list overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-lowest)]">
                 {addons.map((a) => (
                   <AddonRow
                     key={a.id}
@@ -400,6 +400,7 @@ export function SearchPage({ onInstall, onUninstall }: {
           key={selectedAddon.id}
           addon={selectedAddon}
           action={panelAction}
+          maxDockedWidth="calc(100% - 10rem)"
           installedDirName={installedDirFor(selectedAddon)}
           installedAt={installedAtFor(selectedAddon)}
           onClose={() => setSelectedAddon(null)}
