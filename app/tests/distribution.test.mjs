@@ -7,21 +7,23 @@ const forkRepository = "example-owner/example-fork";
 const fork = `https://github.com/${forkRepository}`;
 
 test("the original build uses the original feed and a single About link", () => {
-  const { updater, aboutLinks } = distributionConfig({
-    GITHUB_REPOSITORY: "VitorTaichou/apocrypha",
+  const { updater, aboutLinks, isFork } = distributionConfig({
+    GITHUB_REPOSITORY: "vitortaichou/apocrypha",
   });
 
+  assert.equal(isFork, false);
   assert.deepEqual(updater.endpoints, [`${upstream}/releases/latest/download/latest.json`]);
   assert.ok(updater.pubkey, "preserve the original public key");
   assert.deepEqual(aboutLinks.map(({ url }) => url), [upstream]);
 });
 
 test("the fork uses its own feed and key, with the original credited second", () => {
-  const { updater, aboutLinks } = distributionConfig({
+  const { updater, aboutLinks, isFork } = distributionConfig({
     GITHUB_REPOSITORY: forkRepository,
     TAURI_SIGNING_PUBLIC_KEY: "fork-public-key",
   });
 
+  assert.equal(isFork, true);
   assert.deepEqual(updater.endpoints, [`${fork}/releases/latest/download/latest.json`]);
   assert.equal(updater.pubkey, "fork-public-key");
   assert.deepEqual(aboutLinks.map(({ url }) => url), [fork, upstream]);

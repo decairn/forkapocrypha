@@ -40,6 +40,7 @@ export function distributionConfig(env = process.env) {
   }
 
   return {
+    isFork: !isOriginal,
     updater: { pubkey, endpoints: [`${url}/releases/latest/download/latest.json`] },
     aboutLinks,
   };

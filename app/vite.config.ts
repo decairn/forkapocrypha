@@ -15,12 +15,15 @@ const pkgVersion: string = JSON.parse(
   readFileSync(path.resolve(__dirname, "./package.json"), "utf-8"),
 ).version;
 
+const { aboutLinks, isFork } = distributionConfig();
+
 export default defineConfig(async () => ({
   plugins: lazyPlugins(() => [react(), tailwindcss()]),
 
   define: {
     __APP_VERSION__: JSON.stringify(pkgVersion),
-    __ABOUT_LINKS__: JSON.stringify(distributionConfig().aboutLinks),
+    __ABOUT_LINKS__: JSON.stringify(aboutLinks),
+    __IS_FORK__: JSON.stringify(isFork),
   },
 
   resolve: {

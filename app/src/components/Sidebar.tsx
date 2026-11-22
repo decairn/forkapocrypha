@@ -48,7 +48,7 @@ export function Sidebar({ current, onNavigate }: SidebarProps) {
           A modern ESO addon manager
         </p>
         <p className="mt-1 font-mono text-[10px] tracking-wider text-[var(--color-outline)]">
-          v{__APP_VERSION__}
+          {__IS_FORK__ ? "Forked " : ""}v{__APP_VERSION__}
         </p>
       </div>
 
