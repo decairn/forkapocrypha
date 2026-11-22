@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Layers } from "lucide-react";
 import { getCategoryMeta } from "@/lib/categoryMeta";
+import { useDropdownFit } from "@/lib/useDropdownFit";
 import type { Category } from "@/lib/types";
 
 interface CategorySelectProps {
@@ -12,6 +13,7 @@ interface CategorySelectProps {
 export function CategorySelect({ categories, value, onChange }: CategorySelectProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const menuRef = useDropdownFit(open);
 
   useEffect(() => {
     if (!open) return;
@@ -59,7 +61,7 @@ export function CategorySelect({ categories, value, onChange }: CategorySelectPr
       </button>
 
       {open ? (
-        <div className="absolute left-0 right-0 top-full z-20 mt-1.5 max-h-[420px] overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface-lowest)] p-1 shadow-2xl shadow-black/60">
+        <div ref={menuRef} className="absolute left-0 right-0 z-20 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface-lowest)] p-1 shadow-2xl shadow-black/60">
           <Option
             label="All categories"
             count={categories.reduce((sum, c) => sum + c.file_count, 0)}

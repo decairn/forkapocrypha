@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, type LucideIcon } from "lucide-react";
+import { useDropdownFit } from "@/lib/useDropdownFit";
 
 interface SearchSelectOption<Key extends string> {
   key: Key;
@@ -25,6 +26,7 @@ export function SearchSelect<Key extends string>({
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useDropdownFit(open);
 
   useEffect(() => {
     if (!open) return;
@@ -80,7 +82,7 @@ export function SearchSelect<Key extends string>({
       </button>
 
       {open ? (
-        <div className="absolute left-0 right-0 top-full z-20 mt-1.5 overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-lowest)] p-1 shadow-2xl shadow-black/60">
+        <div ref={menuRef} className="absolute left-0 right-0 z-20 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface-lowest)] p-1 shadow-2xl shadow-black/60">
           {options.map((opt) => {
             const Icon = opt.icon;
             const active = opt.key === value;

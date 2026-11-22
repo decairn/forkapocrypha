@@ -10,6 +10,7 @@ import { WindowBehaviorPanel } from "@/components/WindowBehaviorPanel";
 import { api } from "@/lib/api";
 import type { CatalogMeta } from "@/lib/types";
 import { formatRelativeTime } from "@/lib/format";
+import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, type ZoomAction } from "@/lib/zoom";
 
 function SettingSection({
   title,
@@ -22,7 +23,7 @@ function SettingSection({
 }) {
   return (
     <section className="border-b border-[var(--color-border)] py-8">
-      <div className="grid gap-8 md:grid-cols-[300px_1fr]">
+      <div className="grid gap-4 @2xl:grid-cols-[300px_minmax(0,1fr)] @2xl:gap-8">
         <div>
           <h2 className="text-sm font-medium uppercase tracking-[0.14em] text-[var(--color-on-surface)]">
             {title}
@@ -35,7 +36,16 @@ function SettingSection({
   );
 }
 
-export function SettingsPage() {
+const zoomButtonClass =
+  "min-h-9 min-w-9 rounded-md border border-outline-variant bg-surface-low px-3 text-sm hover:border-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary aria-disabled:opacity-50";
+
+export function SettingsPage({
+  zoom,
+  onZoomChange,
+}: {
+  zoom: number;
+  onZoomChange: (action: ZoomAction) => void;
+}) {
   const [addonsDir, setAddonsDir] = useState("");
   const [meta, setMeta] = useState<CatalogMeta | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -94,7 +104,41 @@ export function SettingsPage() {
     <div className="flex h-full flex-col">
       <PageHeader title="Settings" subtitle="Configure paths, automation, and diagnostics." />
 
-      <div className="flex-1 overflow-y-auto px-10 pb-12">
+      <div className="@container flex-1 overflow-y-auto px-10 pb-12">
+        <SettingSection title="Zoom" description="Use Ctrl + Plus (or Equals), Ctrl + Minus, or Ctrl + 0 to reset.">
+          <div role="group" aria-label="Zoom controls" className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              aria-label="Zoom out"
+              aria-disabled={zoom === MIN_ZOOM}
+              className={zoomButtonClass}
+              onClick={() => onZoomChange("out")}
+            >
+              −
+            </button>
+            <output aria-label="Current zoom" className="min-w-12 text-center text-sm tabular-nums">
+              {zoom}%
+            </output>
+            <button
+              type="button"
+              aria-label="Zoom in"
+              aria-disabled={zoom === MAX_ZOOM}
+              className={zoomButtonClass}
+              onClick={() => onZoomChange("in")}
+            >
+              +
+            </button>
+            <button
+              type="button"
+              aria-disabled={zoom === DEFAULT_ZOOM}
+              className={zoomButtonClass}
+              onClick={() => onZoomChange("reset")}
+            >
+              Reset to 100%
+            </button>
+          </div>
+        </SettingSection>
+
         <SettingSection
           title="AddOns Folder"
           description="Where your ESO addons are installed. Edit if you have a non-standard ESO install."
@@ -103,7 +147,7 @@ export function SettingsPage() {
             <input
               value={addonsDir}
               onChange={(e) => handlePathChange(e.target.value)}
-              className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-lowest)] px-4 py-2.5 font-mono text-sm text-[var(--color-on-surface)] focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
+              className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-lowest)] px-4 py-2.5 font-mono text-sm text-[var(--color-on-surface)] focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
             />
             <button
               onClick={handleBrowse}
