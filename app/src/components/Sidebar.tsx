@@ -17,7 +17,7 @@ const navItems: { id: PageId; label: string; icon: typeof Search }[] = [
 
 export function Sidebar({ current, onNavigate }: SidebarProps) {
   return (
-    <aside className="relative flex w-72 shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-surface-lowest)]">
+    <aside className="relative flex w-48 shrink-0 flex-col overflow-x-hidden overflow-y-auto border-r border-[var(--color-border)] bg-[var(--color-surface-lowest)] min-[900px]:w-72">
       {/* Atmospheric decoration — tentacles emerging from the archivist's trove.
           Sits at the bottom of the sidebar, faded, with a top-gradient mask so
           it dissolves into the surface rather than ending in a hard rectangle. */}
@@ -39,7 +39,7 @@ export function Sidebar({ current, onNavigate }: SidebarProps) {
         />
       </div>
 
-      <div className="relative z-10 flex flex-col items-center px-7 pt-10 pb-10 text-center">
+      <div className="relative z-10 flex flex-col items-center px-2 py-6 text-center min-[900px]:px-7 min-[900px]:py-10">
         <TentacleMark title="Apocrypha" className="h-16 w-16 text-[var(--color-primary)]" />
         <h1 className="mt-5 font-serif text-3xl font-light leading-none tracking-tight text-[var(--color-primary)]">
           APOCRYPHA

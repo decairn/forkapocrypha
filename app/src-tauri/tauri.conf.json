@@ -18,6 +18,7 @@
         "minWidth": 1024,
         "minHeight": 720,
         "backgroundColor": "#101413",
+        "zoomHotkeysEnabled": false,
         "decorations": true,
         "resizable": true,
         "visible": false

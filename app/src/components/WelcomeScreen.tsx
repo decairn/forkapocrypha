@@ -82,8 +82,8 @@ export function WelcomeScreen({ onDismiss }: WelcomeScreenProps) {
       </div>
 
       {/* Right half — instructions card */}
-      <div className="flex flex-1 items-center justify-center px-8 py-10">
-        <div className="w-full max-w-[440px]">
+      <div className="flex flex-1 flex-col overflow-y-auto px-8 py-10">
+        <div className="m-auto w-full max-w-[440px]">
           <div className="flex flex-col items-center text-center">
             <TentacleMark className="h-12 w-12 text-[var(--color-primary)]" title="Apocrypha" />
             <h1 className="mt-5 font-serif text-4xl font-light leading-none tracking-tight text-[var(--color-primary)]">

@@ -10,10 +10,12 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { LegacyUninstallDialog } from "@/components/LegacyUninstallDialog";
 import { InstallConflictDialog } from "@/components/InstallConflictDialog";
 import { api } from "@/lib/api";
+import { useAppZoom } from "@/lib/useAppZoom";
 import type { CatalogMeta, InstallConflictReview, LegacyUninstallFile, UninstallPreview } from "@/lib/types";
 
 function App() {
   const [page, setPage] = useState<PageId>("search");
+  const { zoom, changeZoom } = useAppZoom();
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({ kind: "idle" });
   const [catalogTick, setCatalogTick] = useState(0);
   const [showWelcome, setShowWelcome] = useState(() => !welcomeAlreadyShown());
@@ -184,7 +186,7 @@ function App() {
           {page === "installed" && (
             <InstalledPage catalogTick={catalogTick} onInstall={requestInstall} onUninstall={requestUninstall} />
           )}
-          {page === "settings" && <SettingsPage key={catalogTick} />}
+          {page === "settings" && <SettingsPage key={catalogTick} zoom={zoom} onZoomChange={changeZoom} />}
         </div>
       </main>
       <Toaster toasts={toasts} onDismiss={dismissToast} />
