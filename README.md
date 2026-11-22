@@ -2,13 +2,6 @@
 
 # Apocrypha
 
-**A modern addon manager for The Elder Scrolls Online.**
-
-Fast. Lightweight. Beautifully dark.
-
-[**Download**](https://github.com/decairn/forkapocrypha/releases/latest) ·
-[Report a bug](https://github.com/decairn/forkapocrypha/issues)
-
 [![build](https://github.com/decairn/forkapocrypha/actions/workflows/build.yml/badge.svg?branch=dev)](https://github.com/decairn/forkapocrypha/actions/workflows/build.yml)
 [![release](https://img.shields.io/github/v/release/decairn/forkapocrypha?label=release)](https://github.com/decairn/forkapocrypha/releases/latest)
 [![platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-67D9CA)](https://github.com/decairn/forkapocrypha/releases/latest)
@@ -17,15 +10,23 @@ Fast. Lightweight. Beautifully dark.
 
 ---
 
+## What it does
+
+Apocrypha is a lightweight desktop addon manager for **The Elder Scrolls Online** on Windows and Linux. It runs without an account and collects no telemetry.
+
+- **Browse the ESOUI catalog** of about 3,400 addons with search, sorting, and category filters. Open an addon's details to see its description, changelog, and fullscreen screenshots.
+- **Install addons with their required libraries**, uninstall them, or update them all at once. If an installed library is too old or its version cannot be verified, update the library and retry. Some addons may already have been installed.
+- **Update addons in the background** while ESO is closed. This is off by default. You can enable it in Settings, keep Apocrypha in the system tray, and launch it with Windows.
+- **Back up addon settings** with SavedVariables snapshots you can restore from the app.
+- **Find your AddOns folder automatically**, including when OneDrive manages Documents. You can also choose the folder in Settings.
+
 ## Install
 
 ### Windows
 
 1. Download **`Apocrypha_X.Y.Z_x64_en-US.msi`** from the [latest release](https://github.com/decairn/forkapocrypha/releases/latest).
 2. Double-click to install.
-3. On first launch, Windows SmartScreen shows **"Windows protected your PC"** — click **More info** → **Run anyway**.
-   - The build isn't code-signed yet (signing certificates cost money; this is a hobby project). It's not a virus warning — the source is right here for anyone who wants to read it.
-   - After accepting once, Windows trusts the app and stops prompting.
+3. The installer is unsigned. If Windows SmartScreen shows **"Windows protected your PC"**, click **More info** → **Run anyway**.
 
 ### Linux
 
@@ -43,24 +44,10 @@ The v1.0.0 installers require manual updates. To upgrade, download and install t
 
 ---
 
-## What it does
+## Install conflicts and recovery
 
-- **Browse the full ESOUI catalog** (~3,400 addons) with live search, sort, category filter, and pagination
-- **One-click install** with **recursive dependency resolution** — LibStub, LibAddonMenu-2.0, LibCustomMenu, LibAsync and friends are pulled in automatically without asking
-- Required dependency minimums are checked against the installed manifest's `AddOnVersion`. If a dependency is too old or its version cannot be verified, installation reports an error and may be partial; update the dependency and retry.
-- **Update, uninstall, and bulk Update All** — re-uses the same staged install pipeline, including manifest renames (`.txt` → `.addon`)
-- **Background auto-update** of addons while ESO is closed (off by default; toggle in Settings)
-- **SavedVariables snapshots** — back up your configs before a risky update, restore in one click
-- **System tray + autostart** — close to tray, launch with Windows, catalog stays warm
-- **Detail panel** with description, changelog, screenshot gallery, and a fullscreen lightbox
-- **Self-updating app** via the built-in Tauri Updater
-- **OneDrive-aware** — automatically finds your AddOns folder even when Documents is redirected
-
-### Install conflicts and migration
-
-Apocrypha records each installed file's owner, filesystem identity, and content
-hash in `AddOns/.apocrypha-ownership.json`. Files owned by another addon are
-never overwritten. Manual updates that encounter untracked or modified files
+Apocrypha tracks which addon owns each file and protects files owned by other
+addons. Manual updates that encounter untracked or modified files
 show a confirmation with the affected paths and a backup location. Review the
 complete `conflicts.txt` at that location before accepting: untracked files can
 belong to another addon, and accepting may affect it. Cancelling leaves the
@@ -96,9 +83,8 @@ If an interrupted install or failed rollback leaves a hidden
 `.apocrypha-install-*` directory, recover its `backup` files first, then move
 that directory outside AddOns before retrying. Its `journal.json` lists affected
 paths, whether a new file was planned, and whether an old file existed; use it
-to review newly created files as well as restoring backups. Dependency errors can still
-leave earlier addon installations in place. Do not modify addons with another
-program while an install is running.
+to review newly created files as well as restoring backups. Wait until the
+install finishes before modifying addons with another program.
 
 ---
 
@@ -106,81 +92,11 @@ program while an install is running.
 
 This is a personal project — I wanted something native, lightweight, and tray-friendly for managing my own ESO addons, and figured it might be useful to other people too.
 
-A few things Apocrypha tries to do well:
-
-- **Native and small** — a Rust + Tauri binary around ~10 MB, cold start in well under a second.
-- **Background-friendly** — lives in the system tray, can auto-update addons while ESO is closed, skips work while the game is running.
-- **Safer updates** — SavedVariables snapshots before risky updates; archive staging and rollback protect existing files, including files in shared directories.
-- **Open source** — the source is right here, no telemetry, no accounts.
-
----
-
-## Tech stack
-
-- **[Tauri 2](https://tauri.app/)** + **Rust** — native window, signed bundles, ~10 MB binary
-- **React 19** + **TypeScript** + **[Vite+](https://viteplus.dev/)** — UI
-- **Tailwind 4** + shadcn/ui patterns + **Lucide** icons — design system
-- **SQLite** (via `rusqlite`) — local catalog mirror
-- **reqwest** + **tokio** — async HTTP and background tasks
-- **sysinfo** — process detection for the "skip while ESO runs" logic
-
-Catalog data comes from the official [ESOUI](https://www.esoui.com/) site via the MMOUI v3 API and is mirrored to a local SQLite database that auto-syncs on every launch.
-
----
-
-## Building from source
-
-Use Node.js 22.18 or later in the 22.x line, 24.11 or later in 24.x,
-or 26 or later.
-
-```bash
-git clone https://github.com/decairn/forkapocrypha.git
-cd forkapocrypha/app
-npm install
-npm run tauri dev
-```
-
-The first run on Windows compiles ~300 Rust crates (Tauri, wry, tao, webview2-com, …) — expect **~3–4 minutes**. Subsequent runs are seconds.
-
-Production build:
-
-```bash
-npm run tauri build
-```
-
-Outputs land under `app/src-tauri/target/release/bundle/` (MSI + NSIS on Windows, AppImage + deb on Linux).
-
-### Publishing from a fork
-
-The release workflow uses `GITHUB_REPOSITORY` for the app update feed and the
-first link in Settings → About. Local builds use the GitHub `origin` remote,
-with the original project as the default for source archives. Set
-`GITHUB_REPOSITORY` explicitly when building from a checkout without a
-GitHub `origin`.
-
-Set the fork's GitHub Actions repository variable `TAURI_SIGNING_PUBLIC_KEY`
-to the contents of its Tauri `.key.pub` file. Set the matching private key
-and its password as `TAURI_SIGNING_PRIVATE_KEY` and
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets. The original repository can
-use the public key already in `tauri.conf.json`. For a local unsigned
-installer, run `npm run tauri build -- --config src-tauri/tauri.ci.conf.json`.
-
-For the full architecture overview — module layout, IPC contracts, design tokens, signing/release procedure, and platform gotchas — see [CLAUDE.md](CLAUDE.md).
-
 ---
 
 ## Roadmap
 
-- [x] Catalog browse + search + sort + category filter + pagination
-- [x] Install / Update / Uninstall with recursive dependency resolution
-- [x] Bulk Update All
-- [x] Detail panel with screenshot gallery + lightbox
-- [x] SavedVariables snapshots (manual)
-- [x] System tray + autostart + close-to-tray
-- [x] Background auto-update of addons (ESO-aware)
-- [x] Self-updating app (Tauri Updater)
-- [x] Welcome screen + native folder picker
-- [ ] **Code-signed Windows MSI** (kill the SmartScreen prompt)
+- [ ] **Code-signed Windows MSI**
 - [ ] **winget** submission
 - [ ] **Flathub** submission
 - [ ] Conflict / health detector (orphan dependencies, known incompatibilities)
@@ -190,7 +106,7 @@ For the full architecture overview — module layout, IPC contracts, design toke
 
 ## Contributing
 
-PRs welcome. Development happens on **`dev`**; **`main`** is the release branch (tagged commits cut releases via the [release workflow](.github/workflows/release.yml)). See [CLAUDE.md](CLAUDE.md) > Branching & releases for the full flow.
+Pull requests are welcome. See the [source build instructions](CLAUDE.md#building-from-source) and [branching and release workflow](CLAUDE.md#branching--releases).
 
 If you find an addon that doesn't install or update correctly, [open an issue](https://github.com/decairn/forkapocrypha/issues/new) with the addon name and what you saw — extra points for a screenshot or DevTools console snippet.
 
@@ -198,7 +114,7 @@ If you find an addon that doesn't install or update correctly, [open an issue](h
 
 ## License
 
-To be finalized once a public 1.0 release ships. Source is open for inspection and personal use in the meantime.
+The license is pending. Source is available for inspection and personal use.
 
 ---
 

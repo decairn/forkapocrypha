@@ -2,31 +2,36 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project
-
-Apocrypha is a desktop addon manager for *The Elder Scrolls Online* — a native, lightweight take on managing the ESOUI catalog from your machine. Codename "Archivist".
-
 ## Workspace layout
 
-The repo root is single-project:
+The Apocrypha source lives in `app/`. Tauri 2 connects the Rust backend to the
+React 19 and TypeScript frontend. The frontend uses Vite+, Tailwind 4,
+shadcn/ui patterns, and Lucide icons. The backend uses `rusqlite` for the
+catalog, `reqwest` and `tokio` for network and background work, and `sysinfo`
+to detect when ESO is running.
 
-- **`app/`** — the actual Apocrypha project. Tauri 2 + Rust + React + TypeScript. All work happens here.
+## Building from source
 
-The design system lives entirely in `app/src/index.css` (Tailwind 4 `@theme` tokens).
-
-## Commands (run from `app/`)
+Use Node.js 22.18 or later in the 22.x line, 24.11 or later in 24.x, or 26 or
+later, and stable Rust. From the repository root, change to `app/` before
+running the npm commands.
 
 ```powershell
-npm install                  # First-time deps
-npm run tauri dev            # Launch dev window (first cargo build ~3min, subsequent ~15s)
-npm run tauri build          # Production MSI / AppImage
-npm run build                # Frontend-only build + typecheck (fast validation)
-cd src-tauri ; cargo check --message-format=short    # Rust-only check (faster than full build)
+npm install
+npm run tauri dev
+npm run build  # Frontend build and typecheck
 ```
 
-Vite dev server uses port 1420 (`vite.config.ts`).
-Vite+ (`vite-plus`) provides the `vp` commands behind the frontend `dev`,
-`build`, and `preview` scripts.
+The first Windows build compiles about 300 Rust crates. Allow roughly 3–4
+minutes. The Vite dev server uses port 1420 (`vite.config.ts`). Vite+ provides
+the `vp` commands behind the `dev`, `build`, and `preview` scripts.
+
+For a Rust-only check, run `cargo check --message-format=short` from
+`app/src-tauri/`. For a local unsigned production build, run
+`npm run tauri build -- --config src-tauri/tauri.ci.conf.json` from `app/`.
+Bundles go under `app/src-tauri/target/release/bundle/` (MSI and NSIS on
+Windows, AppImage and deb on Linux). See [Tauri Updater](#tauri-updater-auto-update-of-the-app-itself) for
+updater-enabled builds.
 
 ## Architecture
 
@@ -36,12 +41,20 @@ Two halves communicating via Tauri IPC commands and broadcast events.
 
 - **`lib.rs`** — Tauri builder, command registration, `setup()` hook that auto-syncs the catalog on every boot.
 - **`state.rs`** — `AppState` (single instance via `.manage()`): SQLite connection, MMOUI HTTP client, addons folder path, an async filesystem mutation lock, and `AtomicBool` sync guard. `AppState::run_sync()` owns the sync lifecycle events and is reused by auto-sync and the manual `sync_catalog` command.
-- **`api.rs`** — MMOUI v3 client. Discovers feed URLs via `globalconfig.json`, fetches `filelist.json` (~6000 addons, 5–10 MB) and `categorylist.json`. Lazy `fetch_addon_download_url` and `download_bytes` for install-time use.
+- **`api.rs`** — MMOUI v3 client. Discovers feed URLs via `globalconfig.json`. Fetches the catalog and downloads archives on demand using `fetch_addon_download_url` and `download_bytes`.
 - **`db.rs`** — SQLite catalog at `%APPDATA%/Apocrypha/catalog.db`. WAL mode. Idempotent `ALTER TABLE` migrations on `addons` for new columns (currently `thumbnail_url`, `images`). `find_by_directory` is the bridge from local installed dirs back to catalog entries.
 - **`scanner.rs`** — Walks `<Documents>/Elder Scrolls Online/live/AddOns/`, parses `.txt` / `.addon` manifests (`## Title`, `## Version`, `## DependsOn`, etc.). Strips ESO color codes (`|cRRGGBB...|r`) and handles lossy UTF-8.
-- **`installer.rs`** — Install/uninstall pipeline. The filesystem mutation lock covers the full install/dependency tree, including ownership operations. Archives are staged and files tracked per addon in `.apocrypha-ownership.json` with filesystem identities and SHA-256 hashes. Known other-addon conflicts abort; manual installs can replace untracked or modified files only after explicit confirmation and a persistent conflict backup, while auto-updates abort. Uninstall removes only verified unchanged files for the owner and preserves other files. Rollback failures leave a recovery directory inside AddOns. Dependencies resolve recursively via `find_by_directory` with a visited `HashSet`.
+- **`installer.rs`** — Staged install, update, and uninstall. See [installer invariants](#installer-invariants).
 - **`commands.rs`** — Tauri command wrappers. Async commands emit events for the frontend: `catalog:sync:{start,done,error}`, `addon:install:{start,progress,done,error}`, `addon:uninstall:{done,error}`. Also hosts `enumerate_installed`, which resolves each on-disk addon to a catalog row (see below).
 - **`models.rs`** — Shared serde types (`Addon`, `Category`, `InstalledAddon`, `CatalogMeta`, `SearchResult`). Keep mirrored in `src/lib/types.ts`.
+
+### Installer invariants
+
+- Hold the filesystem mutation lock across the entire install and dependency tree, including ownership updates. Resolve dependencies through `find_by_directory` with a visited `HashSet`. Enforce minimums using the installed manifest's `AddOnVersion`. Dependency failures can leave earlier installs in place.
+- Manual and background updates use the same staged install pipeline. It handles manifest extension changes such as `.txt` to `.addon`.
+- Track ownership, filesystem identity, and SHA-256 per file in `AddOns/.apocrypha-ownership.json`. Reject conflicts with another known owner. Manual installs may replace untracked or modified files only after explicit approval and a persistent backup. Background updates stop on these conflicts.
+- Uninstall verifies ownership and file identity and content before removal. Legacy installs have unknown ownership, even in a shared root. Legacy uninstall allows explicit selection and backs up selected untracked files. It preserves tracked and unselected files and files outside the addon folder.
+- A leftover `.apocrypha-install-*` directory blocks further mutations until recovery. Keep the backup and `journal.json` available for the [recovery steps](README.md#install-conflicts-and-recovery).
 
 ### Installed-row resolution (`commands.rs::enumerate_installed`)
 
@@ -95,12 +108,10 @@ Design rule: Newsreader is reserved for the "APOCRYPHA" wordmark in the sidebar.
 
 - **PowerShell + npm**: On a default Windows install, the bare `npm` command resolves to `npm.ps1` (Node 24+) which is blocked by the `Restricted` ExecutionPolicy. Fix: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`. If `npm --version` returns silently in PowerShell, that's the cause.
 - **OneDrive Documents redirect**: On Windows with OneDrive enabled, the "Documents" folder is redirected under `~/OneDrive/...` and may be localized depending on Windows display language. `dirs::document_dir()` respects this via the Windows Known Folder API, so the scanner finds the right path automatically. If it doesn't, the override is in Settings → AddOns Folder.
-- **AddOns folder override is not persisted yet** (known gap). Changing it in Settings only lasts for the current process.
+- **AddOns folder override** is applied under the filesystem mutation lock and persisted by `set_addons_dir`.
 - **PowerShell wraps cargo stderr**: `cargo` writes progress to stderr, and PowerShell tags it as `NativeCommandError` even on success. Look at the "Finished" line and exit code, not the stderr wrapping.
 - **PATH refresh**: After `winget install`-ing new tools, the current shell session has a stale PATH. Refresh inline: `$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')`. Most PowerShell commands in this workspace prefix this.
-- **MMOUI API has no pagination and no server-side search**. The full catalog (5–10 MB JSON) is downloaded every sync. This is why the local SQLite mirror exists — other addon managers built on the same API take the same approach.
 - **Manifest and catalog versions differ regularly**. The author's `## Version:` inside `Foo.txt`/`Foo.addon` is independent of MMOUI's `UIVersion`. Fallback comparisons normalize separators and prefixes while preserving the digits in each component.
-- **Legacy installs have unknown file ownership.** Manual updates prompt with a conflict list and retain backups before adopting affected files; never infer ownership from a shared root. Legacy uninstall requires explicit selection and backs up only selected untracked files; tracked, unselected, and outside-root files remain. A leftover `.apocrypha-install-*` directory blocks further mutations until its backups are recovered and the directory moved outside AddOns.
 - **Bundle size**: production build is ~265 KB JS, ~20 KB CSS, ~10 MB Rust binary. Stay frugal with new lucide icons (~1 KB each, but they add up if imported broadly).
 
 ## Commits
@@ -108,6 +119,21 @@ Design rule: Newsreader is reserved for the "APOCRYPHA" wordmark in the sidebar.
 Project convention:
 - Commit messages in **English**, natural tone (no Conventional Commits ceremony)
 - **No Co-Authored-By trailers** in commit messages
+
+## Publishing from a fork
+
+The release workflow uses `GITHUB_REPOSITORY` for the app update feed and the
+first link in Settings → About. Local builds use the GitHub `origin` remote,
+with the original project as the default for source archives. Set
+`GITHUB_REPOSITORY` explicitly when building from a checkout without a
+GitHub `origin`.
+
+Set the fork's GitHub Actions repository variable `TAURI_SIGNING_PUBLIC_KEY`
+to the contents of its Tauri `.key.pub` file. Set the matching private key
+and its password as `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets. The original repository can
+use the public key already in `tauri.conf.json`. For a local unsigned
+installer, run `npm run tauri build -- --config src-tauri/tauri.ci.conf.json`.
 
 ## Branching & releases
 
@@ -191,7 +217,7 @@ Use `npm run tauri` so `app/scripts/tauri.mjs` adds the distribution's
 updater configuration to the Tauri build. Vite uses the same distribution
 configuration for Settings → About. The release workflow signs updater
 artifacts and attaches `latest.json` to the draft release. See
-[Publishing from a fork](README.md#publishing-from-a-fork) for signing setup.
+[Publishing from a fork](#publishing-from-a-fork) for signing setup.
 
 Code signing the MSI itself (the SmartScreen warning) is a separate
 concern — that's the Azure Trusted Signing path above and is unrelated
