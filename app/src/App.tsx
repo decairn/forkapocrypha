@@ -179,10 +179,12 @@ function App() {
       <Sidebar current={page} onNavigate={setPage} />
       <main className="relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]">
         <SyncBanner status={syncStatus} />
-        <div className="flex-1 overflow-hidden" key={catalogTick}>
-          {page === "search" && <SearchPage onInstall={requestInstall} onUninstall={requestUninstall} />}
-          {page === "installed" && <InstalledPage onInstall={requestInstall} onUninstall={requestUninstall} />}
-          {page === "settings" && <SettingsPage />}
+        <div className="flex-1 overflow-hidden">
+          {page === "search" && <SearchPage key={catalogTick} onInstall={requestInstall} onUninstall={requestUninstall} />}
+          {page === "installed" && (
+            <InstalledPage catalogTick={catalogTick} onInstall={requestInstall} onUninstall={requestUninstall} />
+          )}
+          {page === "settings" && <SettingsPage key={catalogTick} />}
         </div>
       </main>
       <Toaster toasts={toasts} onDismiss={dismissToast} />

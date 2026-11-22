@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
+  ArrowDownAZ,
   ArrowUpCircle,
   Check,
   CircleMinus,
+  Clock,
   Library,
   ListFilter,
   Loader2,
@@ -19,8 +21,25 @@ import { api } from "@/lib/api";
 import type { Addon, InstalledAddon } from "@/lib/types";
 
 type InstalledStatus = "all" | "up-to-date" | "update-available" | "orphan" | "unused-library";
+type InstalledSort = "name" | "last-updated";
 
-export function InstalledPage({ onInstall, onUninstall }: {
+const installedNameCollator = new Intl.Collator(undefined, { sensitivity: "base" });
+
+function compareInstalledNames(a: InstalledAddon, b: InstalledAddon): number {
+  const byTitle = installedNameCollator.compare(a.title, b.title);
+  if (byTitle) return byTitle;
+  if (a.dir_name === b.dir_name) return 0;
+  return a.dir_name < b.dir_name ? -1 : 1;
+}
+
+function localUpdateTime(addon: InstalledAddon): number {
+  // The installer refreshes installed_at on each successful local install or update.
+  const time = Date.parse(addon.installed_at ?? "");
+  return Number.isNaN(time) ? -Infinity : time;
+}
+
+export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
+  catalogTick: number;
   onInstall: (addonId: string) => Promise<string[]>;
   onUninstall: (dirName: string) => Promise<boolean>;
 }) {
@@ -32,6 +51,7 @@ export function InstalledPage({ onInstall, onUninstall }: {
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<InstalledStatus>("all");
+  const [sort, setSort] = useState<InstalledSort>("name");
 
   const [selectedCatalogAddon, setSelectedCatalogAddon] = useState<Addon | null>(null);
   const [selectedInstalled, setSelectedInstalled] = useState<InstalledAddon | null>(null);
@@ -48,7 +68,7 @@ export function InstalledPage({ onInstall, onUninstall }: {
 
   useEffect(() => {
     reload();
-  }, [reload]);
+  }, [catalogTick, reload]);
 
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
@@ -168,12 +188,20 @@ export function InstalledPage({ onInstall, onUninstall }: {
   const filteredAddons = useMemo(() => {
     if (!addons) return null;
     const q = query.trim().toLowerCase();
-    return addons.filter((a) => {
+    const matching = addons.filter((a) => {
       const rowStatus = a.update_available ? "update-available" : a.catalog_id ? "up-to-date" : "orphan";
       const matchesStatus = status === "unused-library" ? a.unused_lib : status === "all" || status === rowStatus;
       return matchesStatus && (!q || [a.title, a.dir_name, a.author].some((value) => value?.toLowerCase().includes(q)));
     });
-  }, [addons, query, status]);
+    return matching.sort((a, b) => {
+      if (sort === "last-updated") {
+        const aTime = localUpdateTime(a);
+        const bTime = localUpdateTime(b);
+        if (aTime !== bTime) return bTime - aTime;
+      }
+      return compareInstalledNames(a, b);
+    });
+  }, [addons, query, status, sort]);
 
   const handleUpdateAll = useCallback(async () => {
     if (!addons) return;
@@ -303,6 +331,16 @@ export function InstalledPage({ onInstall, onUninstall }: {
                 { key: "update-available", label: "Update available", icon: ArrowUpCircle },
                 { key: "orphan", label: "Orphan", icon: CircleMinus },
                 { key: "unused-library", label: "Unused libraries", icon: Library },
+              ]}
+            />
+            <SearchSelect<InstalledSort>
+              label="Sort by"
+              value={sort}
+              onChange={setSort}
+              widthClass="w-44 max-w-full"
+              options={[
+                { key: "name", label: "Name", icon: ArrowDownAZ },
+                { key: "last-updated", label: "Last Updated", icon: Clock },
               ]}
             />
           </div>
