@@ -1,0 +1,39 @@
+name: Bug report
+description: Report a problem with Apocrypha.
+labels: [bug]
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Describe what you saw and what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: List the steps you took. For an addon issue, include its name or ESOUI link.
+    validations:
+      required: true
+  - type: input
+    id: apocrypha-version
+    attributes:
+      label: Apocrypha version
+      description: Check Settings → About, or give the installer version or commit if the app cannot start.
+      placeholder: vX.Y.Z
+    validations:
+      required: true
+  - type: input
+    id: operating-system
+    attributes:
+      label: Operating system
+      description: Include the Windows version or Linux distribution and version.
+      placeholder: Windows 11 or Ubuntu 24.04
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots, error messages, or logs
+      description: Share any relevant details. Remove personal information before posting.
