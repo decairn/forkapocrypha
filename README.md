@@ -6,7 +6,7 @@
 
 Fast. Lightweight. Beautifully dark.
 
-[Download](https://github.com/VitorTaichou/apocrypha/releases/latest) · [Report a bug](https://github.com/VitorTaichou/apocrypha/issues)
+[Download](https://github.com/decairn/forkapocrypha/releases/latest) · [Report a bug](https://github.com/decairn/forkapocrypha/issues)
 
 [![build](https://github.com/decairn/forkapocrypha/actions/workflows/build.yml/badge.svg?branch=dev)](https://github.com/decairn/forkapocrypha/actions/workflows/build.yml)
 [![release](https://img.shields.io/github/v/release/decairn/forkapocrypha?label=release)](https://github.com/decairn/forkapocrypha/releases/latest)
