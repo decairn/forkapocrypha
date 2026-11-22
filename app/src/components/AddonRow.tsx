@@ -47,7 +47,7 @@ function AddonThumb({ addon }: { addon: Addon }) {
 }
 
 const ACTION_BASE =
-  "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium w-[108px]";
+  "hidden w-[108px] shrink-0 items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium @sm/addon-list:inline-flex";
 
 function ActionButton({
   installing,
@@ -143,38 +143,47 @@ export function AddonRow({
           onSelect();
         }
       }}
-      className={`group flex items-center gap-4 border-b border-[var(--color-border)] px-5 py-3 transition-colors last:border-b-0 ${
+      className={`group flex items-center gap-4 border-b border-[var(--color-border)] px-3 py-3 transition-colors last:border-b-0 @xs/addon-list:px-5 ${
         selected ? "bg-[var(--color-surface-container)]" : "hover:bg-[var(--color-surface-low)]"
       } ${onSelect ? "cursor-pointer" : ""}`}
     >
-      <AddonThumb addon={addon} />
+      <div className="hidden shrink-0 @xs/addon-list:block">
+        <AddonThumb addon={addon} />
+      </div>
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <CategoryIcon categoryId={addon.category_id} />
-          <h3 className="truncate text-[15px] font-medium text-[var(--color-on-surface)]">
+          {addon.category_id ? (
+            <span className="hidden shrink-0 @3xs/addon-list:inline-flex">
+              <CategoryIcon categoryId={addon.category_id} />
+            </span>
+          ) : null}
+          <h3
+            className="min-w-0 truncate text-[15px] font-medium text-[var(--color-on-surface)]"
+            title={addon.name}
+          >
             {addon.name}
           </h3>
           {addon.version ? (
-            <span className="shrink-0 font-mono text-[11px] tracking-wide text-[var(--color-outline)]">
+            <span className="hidden max-w-[35%] shrink-0 truncate font-mono text-[11px] tracking-wide text-[var(--color-outline)] @lg/addon-list:block">
               v{addon.version}
             </span>
           ) : null}
         </div>
-        <p className="truncate text-xs text-[var(--color-on-surface-variant)]">
+        <p className="hidden truncate text-xs text-[var(--color-on-surface-variant)] @3xs/addon-list:block">
           by {addon.author || "Unknown"}
           {addon.last_updated ? (
-            <>
+            <span className="hidden @lg/addon-list:inline">
               <span className="mx-1.5 text-[var(--color-outline-variant)]">·</span>
               <span className="text-[var(--color-outline)]">
                 Updated {formatRelativeTime(addon.last_updated)}
               </span>
-            </>
+            </span>
           ) : null}
         </p>
       </div>
 
-      <div className="flex shrink-0 items-center gap-5 text-xs text-[var(--color-on-surface-variant)]">
+      <div className="hidden shrink-0 items-center gap-5 text-xs text-[var(--color-on-surface-variant)] @xl/addon-list:flex">
         <span className="inline-flex items-center gap-1.5">
           <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
           {formatCount(addon.download_total)}

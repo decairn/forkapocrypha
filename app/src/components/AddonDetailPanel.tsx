@@ -31,6 +31,7 @@ type ActionState =
 interface AddonDetailPanelProps {
   addon: Addon;
   action: ActionState;
+  maxDockedWidth?: string;
   installedDirName?: string | null;
   installedAt?: string | null;
   unusedLibrary?: boolean;
@@ -336,6 +337,7 @@ function ScreenshotStrip({
 export function AddonDetailPanel({
   addon,
   action,
+  maxDockedWidth = "100vw",
   installedDirName,
   installedAt,
   unusedLibrary,
@@ -402,7 +404,7 @@ export function AddonDetailPanel({
         }`}
         style={expanded ? undefined : {
           width: Math.max(panelWidth, MIN_WIDTH),
-          maxWidth: `${MAX_WIDTH_PERCENT * 100}vw`,
+          maxWidth: `min(${MAX_WIDTH_PERCENT * 100}vw, ${maxDockedWidth})`,
         }}
       >
         {!expanded && <ResizeHandle onResize={setPanelWidth} />}
