@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   ArrowDownAZ,
   ArrowUpCircle,
+  CalendarDays,
   Check,
   CircleMinus,
   Clock,
@@ -21,7 +22,7 @@ import { api } from "@/lib/api";
 import type { Addon, InstalledAddon } from "@/lib/types";
 
 type InstalledStatus = "all" | "up-to-date" | "update-available" | "orphan" | "unused-library";
-type InstalledSort = "name" | "last-updated";
+type InstalledSort = "name" | "last-updated" | "last-released";
 
 const installedNameCollator = new Intl.Collator(undefined, { sensitivity: "base" });
 
@@ -193,10 +194,13 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
       const matchesStatus = status === "unused-library" ? a.unused_lib : status === "all" || status === rowStatus;
       return matchesStatus && (!q || [a.title, a.dir_name, a.author].some((value) => value?.toLowerCase().includes(q)));
     });
+    const timestamp = sort === "last-released"
+      ? (addon: InstalledAddon) => addon.catalog_last_updated ?? 0
+      : localUpdateTime;
     return matching.sort((a, b) => {
-      if (sort === "last-updated") {
-        const aTime = localUpdateTime(a);
-        const bTime = localUpdateTime(b);
+      if (sort !== "name") {
+        const aTime = timestamp(a);
+        const bTime = timestamp(b);
         if (aTime !== bTime) return bTime - aTime;
       }
       return compareInstalledNames(a, b);
@@ -341,6 +345,7 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
               options={[
                 { key: "name", label: "Name", icon: ArrowDownAZ },
                 { key: "last-updated", label: "Last Updated", icon: Clock },
+                { key: "last-released", label: "Last Released", icon: CalendarDays },
               ]}
             />
           </div>
