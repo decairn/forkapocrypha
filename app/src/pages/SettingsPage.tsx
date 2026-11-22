@@ -212,7 +212,7 @@ export function SettingsPage({
 
         <SettingSection
           title="App Updates"
-          description="Apocrypha checks for updates from this distribution’s release feed."
+          description="Apocrypha can update itself from the release feed."
         >
           <UpdaterPanel />
         </SettingSection>
