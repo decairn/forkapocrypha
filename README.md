@@ -2,6 +2,12 @@
 
 # Apocrypha
 
+**A modern addon manager for The Elder Scrolls Online.**
+
+Fast. Lightweight. Beautifully dark.
+
+[Download](https://github.com/VitorTaichou/apocrypha/releases/latest) · [Report a bug](https://github.com/VitorTaichou/apocrypha/issues)
+
 [![build](https://github.com/decairn/forkapocrypha/actions/workflows/build.yml/badge.svg?branch=dev)](https://github.com/decairn/forkapocrypha/actions/workflows/build.yml)
 [![release](https://img.shields.io/github/v/release/decairn/forkapocrypha?label=release)](https://github.com/decairn/forkapocrypha/releases/latest)
 [![platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-67D9CA)](https://github.com/decairn/forkapocrypha/releases/latest)
