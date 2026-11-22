@@ -3,7 +3,8 @@ import test from "node:test";
 import { distributionConfig } from "../scripts/distribution.mjs";
 
 const upstream = "https://github.com/VitorTaichou/apocrypha";
-const fork = "https://github.com/decairn/forkapocrypha";
+const forkRepository = "example-owner/example-fork";
+const fork = `https://github.com/${forkRepository}`;
 
 test("the original build uses the original feed and a single About link", () => {
   const { updater, aboutLinks } = distributionConfig({
@@ -17,7 +18,7 @@ test("the original build uses the original feed and a single About link", () => 
 
 test("the fork uses its own feed and key, with the original credited second", () => {
   const { updater, aboutLinks } = distributionConfig({
-    GITHUB_REPOSITORY: "decairn/forkapocrypha",
+    GITHUB_REPOSITORY: forkRepository,
     TAURI_SIGNING_PUBLIC_KEY: "fork-public-key",
   });
 
@@ -28,7 +29,7 @@ test("the fork uses its own feed and key, with the original credited second", ()
 });
 
 test("an unsigned fork build never inherits the original signing key", () => {
-  const env = { GITHUB_REPOSITORY: "decairn/forkapocrypha" };
+  const env = { GITHUB_REPOSITORY: forkRepository };
   assert.equal(distributionConfig(env).updater.pubkey, "");
   assert.throws(
     () => distributionConfig({ ...env, TAURI_SIGNING_PRIVATE_KEY: "test-key" }),
