@@ -1,9 +1,8 @@
 name: release
 
 # Cut a release whenever a vX.Y.Z tag is pushed. The matrix builds MSI on
-# Windows and AppImage on Linux, signs the updater payloads with the keypair
-# stored in repo secrets, and uploads everything to a fresh GitHub Release
-# named after the tag.
+# Windows and AppImage on Linux, with updater artifacts when a signing key
+# is configured, and uploads everything to a draft release for the tag.
 on:
   push:
     tags:
@@ -18,15 +17,12 @@ jobs:
   publish:
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # One installer per OS keeps the release page focused on the file
-          # most users actually want. The updater artifacts (.msi.zip,
-          # .AppImage.tar.gz and their .sig pairs) are still produced because
-          # createUpdaterArtifacts is on in tauri.conf.json — they just sit
-          # under "Show all assets" rather than crowding the front of the page.
           - platform: windows-latest
             args: "--bundles msi"
           - platform: ubuntu-22.04
@@ -38,8 +34,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Need full history + tags so the changelog step can diff against
-          # the previous release tag.
+          ref: refs/tags/${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
       - name: Setup Node
@@ -77,9 +72,9 @@ jobs:
         id: notes
         shell: bash
         run: |
-          git fetch --tags --force --quiet
-          CURRENT="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
-          PREV=$(git tag --sort=-creatordate | grep -v "^${CURRENT}$" | head -1)
+          CURRENT="$RELEASE_TAG"
+          PREV=$(git tag --merged "$CURRENT" --list 'v*' --sort=-version:refname |
+            awk -v current="$CURRENT" '$0 != current && !previous { previous = $0 } END { print previous }')
           if [ -n "$PREV" ]; then
             CHANGES=$(git log "${PREV}..${CURRENT}" --pretty=format:"- %s" --no-merges)
             COMPARE_URL="https://github.com/${{ github.repository }}/compare/${PREV}...${CURRENT}"
@@ -110,7 +105,7 @@ jobs:
             echo 'EOF_BODY'
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build & publish
+      - name: Build and upload draft assets
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -120,9 +115,10 @@ jobs:
         with:
           projectPath: app
           tauriScript: npm run tauri
-          tagName: ${{ github.ref_name || github.event.inputs.tag }}
-          releaseName: "Apocrypha ${{ github.ref_name || github.event.inputs.tag }}"
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: "Apocrypha ${{ env.RELEASE_TAG }}"
           releaseBody: ${{ steps.notes.outputs.BODY }}
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          includeUpdaterJson: ${{ vars.TAURI_SIGNING_PUBLIC_KEY != '' }}
+          args: ${{ matrix.args }}${{ vars.TAURI_SIGNING_PUBLIC_KEY == '' && ' --config src-tauri/tauri.ci.conf.json' || '' }}
