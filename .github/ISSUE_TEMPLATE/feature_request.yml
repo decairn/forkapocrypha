@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest an improvement to Apocrypha.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe your workflow and the problem you run into.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Apocrypha to do?
+      description: Describe the change and how it would help.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds
+      description: Share any workarounds you use or other approaches you considered.
