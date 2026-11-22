@@ -151,6 +151,21 @@ npm run tauri build
 
 Outputs land under `app/src-tauri/target/release/bundle/` (MSI + NSIS on Windows, AppImage + deb on Linux).
 
+### Publishing from a fork
+
+The release workflow uses `GITHUB_REPOSITORY` for the app update feed and the
+first link in Settings → About. Local builds use the GitHub `origin` remote,
+with the original project as the default for source archives. Set
+`GITHUB_REPOSITORY` explicitly when building from a checkout without a
+GitHub `origin`.
+
+Set the fork's GitHub Actions repository variable `TAURI_SIGNING_PUBLIC_KEY`
+to the contents of its Tauri `.key.pub` file. Set the matching private key
+and its password as `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets. The original repository can
+use the public key already in `tauri.conf.json`. For a local unsigned
+installer, run `npm run tauri build -- --config src-tauri/tauri.ci.conf.json`.
+
 For the full architecture overview — module layout, IPC contracts, design tokens, signing/release procedure, and platform gotchas — see [CLAUDE.md](CLAUDE.md).
 
 ---
