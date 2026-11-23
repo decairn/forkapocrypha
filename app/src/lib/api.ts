@@ -44,6 +44,10 @@ export const api = {
     return invoke<InstalledAddon[]>("list_installed");
   },
 
+  refreshCatalogForRescan(): Promise<void> {
+    return invoke<void>("refresh_catalog_for_rescan");
+  },
+
   syncCatalog(): Promise<CatalogMeta> {
     return invoke<CatalogMeta>("sync_catalog");
   },

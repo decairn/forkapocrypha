@@ -1,10 +1,13 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::Mutex as AsyncMutex;
 
 const CLOSE_TO_TRAY_KEY: &str = "close_to_tray";
 const AUTO_UPDATE_INTERVAL_KEY: &str = "auto_update_interval_minutes";
@@ -20,12 +23,14 @@ pub struct AppState {
     pub addon_fs_mutations: tokio::sync::Mutex<()>,
     pub backups_dir: PathBuf,
     pub mmoui: MmouiClient,
-    pub syncing: AtomicBool,
+    pub syncing: AsyncMutex<()>,
     pub close_to_tray: AtomicBool,
     pub auto_update_interval_minutes: AtomicU64,
 }
 
 const ADDONS_DIR_KEY: &str = "addons_dir_override";
+const RESCAN_CATALOG_MAX_AGE: chrono::TimeDelta = chrono::TimeDelta::minutes(5);
+const RESCAN_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl AppState {
     pub fn init() -> Result<Self> {
@@ -55,7 +60,7 @@ impl AppState {
             addon_fs_mutations: tokio::sync::Mutex::new(()),
             backups_dir,
             mmoui: MmouiClient::new(),
-            syncing: AtomicBool::new(false),
+            syncing: AsyncMutex::new(()),
             close_to_tray: AtomicBool::new(close_to_tray),
             auto_update_interval_minutes: AtomicU64::new(auto_update_interval),
         })
@@ -88,31 +93,90 @@ impl AppState {
     }
 
     pub async fn run_sync(&self, app: &AppHandle) -> Result<CatalogMeta> {
-        run_guarded_sync(
-            &self.syncing,
-            async {
-                let addons = self.mmoui.fetch_addons().await?;
-                let categories = self.mmoui.fetch_categories().await?;
+        run_guarded_sync(&self.syncing, self.sync_catalog(None), |event| {
+            emit_sync_event(app, event)
+        })
+        .await
+    }
 
-                let mut conn = self.db.lock().unwrap();
-                db::upsert_categories(&mut conn, &categories)?;
-                db::upsert_addons(&mut conn, &addons)?;
-                db::catalog_meta(&conn)
+    pub async fn refresh_catalog_for_rescan(&self, app: &AppHandle) -> Result<()> {
+        refresh_if_stale(
+            &self.syncing,
+            || {
+                let conn = self.db.lock().unwrap();
+                let last_synced = db::get_metadata(&conn, "last_synced");
+                catalog_is_fresh(last_synced.as_deref(), Utc::now())
             },
-            |event| match event {
-                SyncEvent::Start => {
-                    let _ = app.emit("catalog:sync:start", ());
-                }
-                SyncEvent::Done(meta) => {
-                    let _ = app.emit("catalog:sync:done", meta);
-                }
-                SyncEvent::Error(error) => {
-                    let _ = app.emit("catalog:sync:error", error.to_string());
-                }
+            async {
+                report_sync(self.sync_catalog(Some(RESCAN_REFRESH_TIMEOUT)), |event| {
+                    emit_sync_event(app, event);
+                })
+                .await
+                .map(drop)
             },
+            RESCAN_REFRESH_TIMEOUT,
         )
         .await
     }
+
+    async fn sync_catalog(&self, timeout: Option<Duration>) -> Result<CatalogMeta> {
+        let fetch = async {
+            let addons = self.mmoui.fetch_addons().await?;
+            let categories = self.mmoui.fetch_categories().await?;
+            Ok::<_, anyhow::Error>((addons, categories))
+        };
+        let (addons, categories) = match timeout {
+            Some(duration) => tokio::time::timeout(duration, fetch)
+                .await
+                .context("ESOUI catalog refresh timed out")??,
+            None => fetch.await?,
+        };
+
+        let mut conn = self.db.lock().unwrap();
+        db::upsert_categories(&mut conn, &categories)?;
+        db::upsert_addons(&mut conn, &addons)?;
+        db::catalog_meta(&conn)
+    }
+}
+
+fn catalog_is_fresh(last_synced: Option<&str>, now: DateTime<Utc>) -> bool {
+    last_synced
+        .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok())
+        .is_some_and(|timestamp| {
+            let age = now.signed_duration_since(timestamp);
+            (chrono::TimeDelta::zero()..=RESCAN_CATALOG_MAX_AGE).contains(&age)
+        })
+}
+
+async fn refresh_if_stale(
+    syncing: &AsyncMutex<()>,
+    is_fresh: impl Fn() -> bool,
+    refresh: impl Future<Output = Result<()>>,
+    wait_limit: Duration,
+) -> Result<()> {
+    if is_fresh() {
+        return Ok(());
+    }
+
+    let Ok(_guard) = syncing.try_lock() else {
+        let _guard = tokio::time::timeout(wait_limit, syncing.lock())
+            .await
+            .context("waiting for the ESOUI catalog refresh timed out")?;
+        // The running sync either made the cache fresh or failed. Avoid an
+        // immediate second request if it failed.
+        return if is_fresh() {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "the in-progress ESOUI catalog refresh did not complete successfully"
+            ))
+        };
+    };
+
+    if !is_fresh() {
+        refresh.await?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -126,16 +190,18 @@ enum SyncEvent<'a, T> {
 }
 
 async fn run_guarded_sync<T>(
-    syncing: &AtomicBool,
+    syncing: &AsyncMutex<()>,
+    work: impl Future<Output = Result<T>>,
+    emit: impl FnMut(SyncEvent<'_, T>),
+) -> Result<T> {
+    let _guard = syncing.try_lock().map_err(|_| SyncInProgress)?;
+    report_sync(work, emit).await
+}
+
+async fn report_sync<T>(
     work: impl Future<Output = Result<T>>,
     mut emit: impl FnMut(SyncEvent<'_, T>),
 ) -> Result<T> {
-    if syncing.swap(true, Ordering::SeqCst) {
-        return Err(SyncInProgress.into());
-    }
-    // Keep ownership through the terminal event so another sync cannot emit
-    // its start before this sync has reported its result.
-    let _guard = SyncGuard(syncing);
     emit(SyncEvent::Start);
     let result = work.await;
     match &result {
@@ -145,11 +211,17 @@ async fn run_guarded_sync<T>(
     result
 }
 
-struct SyncGuard<'a>(&'a AtomicBool);
-
-impl<'a> Drop for SyncGuard<'a> {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
+fn emit_sync_event(app: &AppHandle, event: SyncEvent<'_, CatalogMeta>) {
+    match event {
+        SyncEvent::Start => {
+            let _ = app.emit("catalog:sync:start", ());
+        }
+        SyncEvent::Done(meta) => {
+            let _ = app.emit("catalog:sync:done", meta);
+        }
+        SyncEvent::Error(error) => {
+            let _ = app.emit("catalog:sync:error", error.to_string());
+        }
     }
 }
 
@@ -159,9 +231,84 @@ mod tests {
     use std::sync::Mutex;
     use tokio::sync::oneshot;
 
+    #[test]
+    fn rescan_cache_uses_the_last_successful_sync() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-23T12:05:00Z")
+            .unwrap()
+            .to_utc();
+        assert!(catalog_is_fresh(Some("2026-11-23T12:00:00Z"), now));
+        assert!(!catalog_is_fresh(Some("2026-11-23T11:59:59Z"), now));
+        assert!(!catalog_is_fresh(Some("2026-11-23T12:05:01Z"), now));
+        assert!(!catalog_is_fresh(Some("invalid"), now));
+        assert!(!catalog_is_fresh(None, now));
+    }
+
+    #[tokio::test]
+    async fn rescan_waits_for_active_sync_without_downloading_again() {
+        for succeeded in [true, false] {
+            let syncing = AsyncMutex::new(());
+            let guard = syncing.lock().await;
+            let fresh = AtomicBool::new(false);
+            let rescan = refresh_if_stale(
+                &syncing,
+                || fresh.load(Ordering::SeqCst),
+                async { panic!("an in-flight refresh must not start another download") },
+                Duration::from_secs(1),
+            );
+            tokio::pin!(rescan);
+            assert!(tokio::time::timeout(Duration::ZERO, &mut rescan)
+                .await
+                .is_err());
+            fresh.store(succeeded, Ordering::SeqCst);
+            drop(guard);
+            assert_eq!(rescan.await.is_ok(), succeeded);
+        }
+    }
+
+    #[tokio::test]
+    async fn rescan_can_time_out_waiting_for_active_sync() {
+        let syncing = AsyncMutex::new(());
+        let _guard = syncing.lock().await;
+        let result = refresh_if_stale(
+            &syncing,
+            || false,
+            async { panic!("a wait timeout must not start another download") },
+            Duration::ZERO,
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn rescan_reuses_a_fresh_catalog_and_surfaces_failed_downloads() {
+        let syncing = AsyncMutex::new(());
+        let wait_limit = Duration::from_secs(1);
+        refresh_if_stale(
+            &syncing,
+            || true,
+            async { panic!("a fresh catalog must not trigger a download") },
+            wait_limit,
+        )
+        .await
+        .unwrap();
+
+        let result = refresh_if_stale(
+            &syncing,
+            || false,
+            async {
+                assert!(syncing.try_lock().is_err());
+                Err(anyhow!("ESOUI unavailable"))
+            },
+            wait_limit,
+        )
+        .await;
+        assert_eq!(result.unwrap_err().to_string(), "ESOUI unavailable");
+        assert!(syncing.try_lock().is_ok());
+    }
+
     #[tokio::test]
     async fn concurrent_sync_emits_no_events_or_work_and_next_sync_can_start() {
-        let syncing = AtomicBool::new(false);
+        let syncing = AsyncMutex::new(());
         let events = Mutex::new(Vec::new());
         let (started_tx, started_rx) = oneshot::channel();
         let (release_tx, release_rx) = oneshot::channel();
@@ -173,7 +320,7 @@ mod tests {
                 Ok(42)
             },
             |event| {
-                assert!(syncing.load(Ordering::SeqCst));
+                assert!(syncing.try_lock().is_err());
                 events.lock().unwrap().push(match event {
                     SyncEvent::Start => "start",
                     SyncEvent::Done(value) => {
@@ -197,7 +344,7 @@ mod tests {
         };
         let (result, ()) = tokio::join!(owner, contender);
         assert_eq!(result.unwrap(), 42);
-        assert!(!syncing.load(Ordering::SeqCst));
+        assert!(syncing.try_lock().is_ok());
 
         run_guarded_sync(&syncing, async { Ok(()) }, |event| {
             events.lock().unwrap().push(match event {
@@ -213,13 +360,13 @@ mod tests {
 
     #[tokio::test]
     async fn failed_sync_emits_error_and_releases_guard() {
-        let syncing = AtomicBool::new(false);
+        let syncing = AsyncMutex::new(());
         let events = Mutex::new(Vec::new());
         let result = run_guarded_sync(
             &syncing,
             async { Err::<(), _>(anyhow!("refresh failed")) },
             |event| {
-                assert!(syncing.load(Ordering::SeqCst));
+                assert!(syncing.try_lock().is_err());
                 events.lock().unwrap().push(match event {
                     SyncEvent::Start => "start",
                     SyncEvent::Done(_) => "done",
@@ -233,7 +380,7 @@ mod tests {
         .await;
         assert_eq!(result.unwrap_err().to_string(), "refresh failed");
         assert_eq!(*events.lock().unwrap(), ["start", "error"]);
-        assert!(!syncing.load(Ordering::SeqCst));
+        assert!(syncing.try_lock().is_ok());
         assert_eq!(
             run_guarded_sync(&syncing, async { Ok(7) }, |_| {}).await.unwrap(),
             7

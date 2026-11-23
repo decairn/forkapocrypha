@@ -291,6 +291,14 @@ pub async fn list_installed(state: State<'_, AppState>) -> CmdResult<Vec<Install
 }
 
 #[tauri::command]
+pub async fn refresh_catalog_for_rescan(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state.refresh_catalog_for_rescan(&app).await.map_err(map_err)
+}
+
+#[tauri::command]
 pub async fn sync_catalog(
     app: AppHandle,
     state: State<'_, AppState>,

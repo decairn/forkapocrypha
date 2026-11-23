@@ -22,6 +22,7 @@ Apocrypha is a lightweight desktop addon manager for **The Elder Scrolls Online*
 
 - **Browse the ESOUI catalog** of about 3,400 addons with search, sorting, and category filters. Open an addon's details to see its description, changelog, and fullscreen screenshots.
 - **Install addons with their required libraries**, uninstall them, or update them all at once. If an installed library is too old or its version cannot be verified, update the library and retry. Some addons may already have been installed.
+- **Re-scan installed addons** to check for updates.
 - **Update addons in the background** while ESO is closed. This is off by default. You can enable it in Settings, keep Apocrypha in the system tray, and launch it with Windows.
 - **Back up addon settings** with SavedVariables snapshots you can restore from the app.
 - **Find your AddOns folder automatically**, including when OneDrive manages Documents. You can also choose the folder in Settings.
