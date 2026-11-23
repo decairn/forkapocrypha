@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.1.0](https://github.com/decairn/forkapocrypha/compare/v1.0.1...v1.1.0) (2026-11-23)
+
+### Features
+
+* open the SavedVariables backup folder from Settings ([24bca48](https://github.com/decairn/forkapocrypha/commit/24bca4887d87248df9df71d738171052a9b88d47)), closes [#51](https://github.com/decairn/forkapocrypha/issues/51)
+* organize addon details into tabs ([6585d9d](https://github.com/decairn/forkapocrypha/commit/6585d9dac8350b1da34c4aaf17c40cf4ceed5fa6)), closes [#52](https://github.com/decairn/forkapocrypha/issues/52)
+* refresh the ESOUI catalog on rescan ([88b4717](https://github.com/decairn/forkapocrypha/commit/88b471796b33a911093d5256f2faa04bf29faf80)), references [#49](https://github.com/decairn/forkapocrypha/issues/49)
+
+### Documentation
+
+* add GitHub issue forms ([6cfd7c9](https://github.com/decairn/forkapocrypha/commit/6cfd7c9ed826419e999b6de5323328c697ae7c14))
+
+### Miscellaneous Chores
+
+* **release:** prepare v1.1.0 ([088270e](https://github.com/decairn/forkapocrypha/commit/088270e271e8220eebbd015599d497d204d0e6d7))
+
 ## [1.0.1](https://github.com/decairn/forkapocrypha/compare/v1.0.0...v1.0.1) (2026-11-22)
 
 ### Bug Fixes
