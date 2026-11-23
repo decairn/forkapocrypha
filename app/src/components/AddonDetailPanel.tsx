@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import {
   ArrowUpCircle,
   Check,
@@ -350,6 +357,10 @@ export function AddonDetailPanel({
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState(0);
+  const tabsId = useId();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const tabsRef = useRef<HTMLDivElement>(null);
   const [panelWidth, setPanelWidth] = useDetailPanelWidth();
   const [expanded, setExpanded] = useState(
     () => typeof window !== "undefined" && window.localStorage.getItem(EXPANDED_STORAGE_KEY) === "true",
@@ -389,8 +400,75 @@ export function AddonDetailPanel({
   const meta = addon.category_id ? getCategoryMeta(addon.category_id) : null;
   const CategoryIconComp = meta?.icon;
 
-  const description = details?.description ?? "";
-  const changelog = details?.changelog ?? "";
+  function renderDetailText(text: string | undefined, lines: number, emptyMessage: string) {
+    if (detailsLoading) return <Skeleton lines={lines} />;
+    if (detailsError) return <p className="text-sm text-error">{detailsError}</p>;
+    if (text) return <BBCodeContent text={text} />;
+    return <p className="text-sm italic text-outline">{emptyMessage}</p>;
+  }
+
+  const sourceUrl = addon.file_info_url;
+  const tabs = [
+    {
+      label: "Description",
+      content: renderDetailText(details?.description, 4, "No description provided."),
+    },
+    {
+      label: "Changelog",
+      content: renderDetailText(details?.changelog, 3, "No changelog provided."),
+    },
+    {
+      label: "Source",
+      content: sourceUrl ? (
+        <button
+          type="button"
+          onClick={() => openUrl(sourceUrl).catch(() => {})}
+          className="inline-flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-low)] px-3 py-1.5 text-xs font-medium text-[var(--color-on-surface-variant)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]"
+        >
+          <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} />
+          Open on ESOUI
+        </button>
+      ) : (
+        <p className="text-sm italic text-outline">No source link available.</p>
+      ),
+    },
+  ];
+
+  function selectTab(index: number) {
+    if (index === activeTab) return;
+    const scroll = scrollRef.current;
+    const section = tabsRef.current;
+    if (scroll && section) {
+      // Return to the start of the new panel when switching from deep in the old one.
+      const offset = section.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
+      if (offset < 0) scroll.scrollTop += offset;
+    }
+    setActiveTab(index);
+  }
+
+  function handleTabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
+    let next: number;
+    switch (event.key) {
+      case "ArrowLeft":
+        next = (index + tabs.length - 1) % tabs.length;
+        break;
+      case "ArrowRight":
+        next = (index + 1) % tabs.length;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = tabs.length - 1;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    selectTab(next);
+    document.getElementById(`${tabsId}-tab-${next}`)?.focus({ preventScroll: true });
+  }
+
   const galleryImages = addon.images;
   const resizeLabel = expanded ? "Restore addon details width" : "Expand addon details";
   const ResizeIcon = expanded ? Minimize2 : Maximize2;
@@ -428,7 +506,7 @@ export function AddonDetailPanel({
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto scroll-pt-14">
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto scroll-pt-14">
           <HeroImage
             addon={addon}
             onExpand={() => galleryImages.length > 0 && setLightboxIndex(0)}
@@ -501,37 +579,43 @@ export function AddonDetailPanel({
             </Section>
           ) : null}
 
-          <Section title="Description">
-            {detailsLoading ? (
-              <Skeleton lines={4} />
-            ) : detailsError ? (
-              <p className="text-sm text-[var(--color-error)]">{detailsError}</p>
-            ) : description ? (
-              <BBCodeContent text={description} />
-            ) : (
-              <p className="text-sm italic text-[var(--color-outline)]">No description provided.</p>
-            )}
-          </Section>
-
-          {detailsLoading || changelog ? (
-            <Section title="Changelog">
-              {detailsLoading ? <Skeleton lines={3} /> : <BBCodeContent text={changelog} />}
-            </Section>
-          ) : null}
-
-          {addon.file_info_url ? (
-            <Section title="Source">
-              <button
-                onClick={() => {
-                  if (addon.file_info_url) openUrl(addon.file_info_url).catch(() => {});
-                }}
-                className="inline-flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-low)] px-3 py-1.5 text-xs font-medium text-[var(--color-on-surface-variant)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]"
+          <div ref={tabsRef} className="mt-4">
+            <div
+              role="tablist"
+              aria-label="Addon details"
+              className="sticky top-0 z-10 flex overflow-x-auto border-b border-border bg-surface-lowest pl-4 pr-[5.25rem]"
+            >
+              {tabs.map(({ label }, index) => (
+                <button
+                  key={label}
+                  type="button"
+                  role="tab"
+                  id={`${tabsId}-tab-${index}`}
+                  aria-controls={`${tabsId}-panel-${index}`}
+                  aria-selected={activeTab === index}
+                  tabIndex={activeTab === index ? 0 : -1}
+                  onClick={() => selectTab(index)}
+                  onKeyDown={(event) => handleTabKeyDown(event, index)}
+                  className="min-h-11 shrink-0 border-b-2 border-transparent px-2 text-sm font-medium text-on-surface-variant hover:text-on-surface focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary aria-selected:border-primary aria-selected:text-primary"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {tabs.map(({ label, content }, index) => (
+              <div
+                key={label}
+                role="tabpanel"
+                id={`${tabsId}-panel-${index}`}
+                aria-labelledby={`${tabsId}-tab-${index}`}
+                hidden={activeTab !== index}
+                tabIndex={0}
+                className="px-6 py-4 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
               >
-                <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} />
-                Open on ESOUI
-              </button>
-            </Section>
-          ) : null}
+                {activeTab === index ? content : null}
+              </div>
+            ))}
+          </div>
         </div>
       </aside>
 
