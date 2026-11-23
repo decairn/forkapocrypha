@@ -387,6 +387,12 @@ pub fn list_savedvars_snapshots(state: State<'_, AppState>) -> CmdResult<Vec<Sna
 }
 
 #[tauri::command]
+pub async fn open_savedvars_backup_folder(state: State<'_, AppState>) -> CmdResult<()> {
+    std::fs::create_dir_all(&state.backups_dir).map_err(map_err)?;
+    tauri_plugin_opener::open_path(&state.backups_dir, None::<&str>).map_err(map_err)
+}
+
+#[tauri::command]
 pub fn create_savedvars_snapshot(state: State<'_, AppState>) -> CmdResult<Snapshot> {
     let addons_dir = state.addons_dir.lock().unwrap().clone();
     let sv_dir = savedvars::savedvars_dir_for(&addons_dir)

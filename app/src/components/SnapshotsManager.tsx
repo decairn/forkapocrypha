@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Camera, Loader2, RotateCcw, Trash2, Zap } from "lucide-react";
+import { AlertTriangle, Camera, FolderOpen, Loader2, RotateCcw, Trash2, Zap } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Snapshot } from "@/lib/types";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
@@ -49,6 +49,19 @@ export function SnapshotsManager() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  async function handleOpenFolder() {
+    setBusy("open");
+    setError(null);
+    try {
+      await api.openBackupFolder();
+    } catch {
+      setInfo(null);
+      setError("Could not open the backup folder.");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function handleCreate() {
     setBusy("create");
@@ -105,24 +118,35 @@ export function SnapshotsManager() {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-[var(--color-on-surface-variant)]">
           {snapshots
             ? `${snapshots.length} snapshot${snapshots.length === 1 ? "" : "s"} stored`
             : "Loading snapshots..."}
         </p>
-        <button
-          onClick={handleCreate}
-          disabled={busy === "create"}
-          className="inline-flex items-center gap-2 rounded-md border border-[var(--color-primary)]/40 bg-[var(--color-primary-container)]/15 px-3.5 py-1.5 text-xs font-medium text-[var(--color-primary)] hover:border-[var(--color-primary)] hover:bg-[var(--color-primary-container)]/30 disabled:opacity-60"
-        >
-          {busy === "create" ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} />
-          ) : (
-            <Camera className="h-3.5 w-3.5" strokeWidth={1.75} />
-          )}
-          Create snapshot
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={handleOpenFolder}
+            disabled={!!busy}
+            className="inline-flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-low)] px-3.5 py-1.5 text-xs font-medium text-[var(--color-on-surface-variant)] hover:border-[var(--color-primary)]/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-50"
+          >
+            <FolderOpen className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
+            Open backup folder
+          </button>
+          <button
+            onClick={handleCreate}
+            disabled={!!busy}
+            className="inline-flex items-center gap-2 rounded-md border border-[var(--color-primary)]/40 bg-[var(--color-primary-container)]/15 px-3.5 py-1.5 text-xs font-medium text-[var(--color-primary)] hover:border-[var(--color-primary)] hover:bg-[var(--color-primary-container)]/30 disabled:opacity-60"
+          >
+            {busy === "create" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} />
+            ) : (
+              <Camera className="h-3.5 w-3.5" strokeWidth={1.75} />
+            )}
+            Create snapshot
+          </button>
+        </div>
       </div>
 
       {info ? (
@@ -131,7 +155,7 @@ export function SnapshotsManager() {
         </p>
       ) : null}
       {error ? (
-        <div className="flex items-start gap-2 rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error-container)]/15 px-3 py-2 text-xs text-[var(--color-error)]">
+        <div role="alert" className="flex items-start gap-2 rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error-container)]/15 px-3 py-2 text-xs text-[var(--color-error)]">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
           {error}
         </div>

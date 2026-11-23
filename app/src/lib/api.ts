@@ -93,6 +93,10 @@ export const api = {
     return invoke<Snapshot[]>("list_savedvars_snapshots");
   },
 
+  openBackupFolder(): Promise<void> {
+    return invoke<void>("open_savedvars_backup_folder");
+  },
+
   createSnapshot(): Promise<Snapshot> {
     return invoke<Snapshot>("create_savedvars_snapshot");
   },

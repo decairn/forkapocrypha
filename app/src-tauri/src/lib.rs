@@ -234,6 +234,7 @@ pub fn run() {
             commands::get_addon_by_id,
             commands::get_addon_details,
             commands::list_savedvars_snapshots,
+            commands::open_savedvars_backup_folder,
             commands::create_savedvars_snapshot,
             commands::restore_savedvars_snapshot,
             commands::delete_savedvars_snapshot,
