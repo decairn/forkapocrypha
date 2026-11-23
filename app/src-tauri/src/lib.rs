@@ -222,6 +222,7 @@ pub fn run() {
             commands::list_categories,
             commands::catalog_meta,
             commands::list_installed,
+            commands::refresh_catalog_for_rescan,
             commands::sync_catalog,
             commands::get_addons_dir,
             commands::set_addons_dir,

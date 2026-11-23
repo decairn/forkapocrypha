@@ -1772,7 +1772,7 @@ mod tests {
             addon_fs_mutations: tokio::sync::Mutex::new(()),
             backups_dir: temp.path().join("backups"),
             mmoui: crate::api::MmouiClient::new(),
-            syncing: AtomicBool::new(false),
+            syncing: tokio::sync::Mutex::new(()),
             close_to_tray: AtomicBool::new(false),
             auto_update_interval_minutes: AtomicU64::new(0),
         });
@@ -1812,7 +1812,7 @@ mod tests {
             addon_fs_mutations: tokio::sync::Mutex::new(()),
             backups_dir: temp.path().join("backups"),
             mmoui: crate::api::MmouiClient::new(),
-            syncing: AtomicBool::new(false),
+            syncing: tokio::sync::Mutex::new(()),
             close_to_tray: AtomicBool::new(false),
             auto_update_interval_minutes: AtomicU64::new(0),
         });
@@ -1977,7 +1977,7 @@ mod tests {
             addon_fs_mutations: tokio::sync::Mutex::new(()),
             backups_dir: temp.path().join("backups"),
             mmoui: crate::api::MmouiClient::new(),
-            syncing: AtomicBool::new(false),
+            syncing: tokio::sync::Mutex::new(()),
             close_to_tray: AtomicBool::new(false),
             auto_update_interval_minutes: AtomicU64::new(0),
         })
@@ -2653,7 +2653,7 @@ mod tests {
             addon_fs_mutations: tokio::sync::Mutex::new(()),
             backups_dir: temp.path().join("backups"),
             mmoui: crate::api::MmouiClient::new(),
-            syncing: AtomicBool::new(false),
+            syncing: tokio::sync::Mutex::new(()),
             close_to_tray: AtomicBool::new(false),
             auto_update_interval_minutes: AtomicU64::new(0),
         };

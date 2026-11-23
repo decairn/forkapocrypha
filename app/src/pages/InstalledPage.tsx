@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   ArrowDownAZ,
@@ -47,6 +47,9 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
   const [addons, setAddons] = useState<InstalledAddon[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshingCatalog, setRefreshingCatalog] = useState(false);
+  const [catalogRefreshFailed, setCatalogRefreshFailed] = useState(false);
+  const latestScan = useRef(0);
   const [uninstalling, setUninstalling] = useState<Set<string>>(new Set());
   const [updatingCatalogIds, setUpdatingCatalogIds] = useState<Set<string>>(new Set());
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
@@ -57,17 +60,36 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
   const [selectedCatalogAddon, setSelectedCatalogAddon] = useState<Addon | null>(null);
   const [selectedInstalled, setSelectedInstalled] = useState<InstalledAddon | null>(null);
 
-  const reload = useCallback(() => {
+  const reload = useCallback(async () => {
+    const scan = ++latestScan.current;
     setLoading(true);
     setError(null);
-    api
-      .listInstalled()
-      .then(setAddons)
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
+    try {
+      const installed = await api.listInstalled();
+      if (scan === latestScan.current) setAddons(installed);
+    } catch (error) {
+      if (scan === latestScan.current) setError(String(error));
+    } finally {
+      if (scan === latestScan.current) setLoading(false);
+    }
   }, []);
 
+  const rescan = useCallback(async () => {
+    setRefreshingCatalog(true);
+    setCatalogRefreshFailed(false);
+    try {
+      await api.refreshCatalogForRescan();
+    } catch (error) {
+      console.warn("Could not refresh the ESOUI catalog:", error);
+      setCatalogRefreshFailed(true);
+    } finally {
+      setRefreshingCatalog(false);
+    }
+    await reload();
+  }, [reload]);
+
   useEffect(() => {
+    setCatalogRefreshFailed(false);
     reload();
   }, [catalogTick, reload]);
 
@@ -297,20 +319,26 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
                 </button>
               ) : null}
               <button
-                onClick={reload}
-                disabled={loading || !!bulkProgress}
+                onClick={rescan}
+                disabled={refreshingCatalog || loading || !!bulkProgress}
                 className="inline-flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-low)] px-4 py-2 text-sm text-[var(--color-on-surface-variant)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] disabled:opacity-50"
               >
-                {loading ? (
+                {refreshingCatalog || loading ? (
                   <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />
                 ) : (
                   <RefreshCw className="h-4 w-4" strokeWidth={1.75} />
                 )}
-                Re-scan
+                {refreshingCatalog ? "Checking ESOUI…" : loading ? "Scanning…" : "Re-scan"}
               </button>
             </>
           }
         />
+
+        {catalogRefreshFailed ? (
+          <p className="px-10 pt-4 text-sm text-[var(--color-on-surface-variant)]" role="status">
+            Couldn’t refresh the ESOUI catalog. Update availability may be out of date.
+          </p>
+        ) : null}
 
         {addons && addons.length > 0 ? (
           <div className="flex flex-wrap items-center gap-3 px-10 pb-6 pt-8">

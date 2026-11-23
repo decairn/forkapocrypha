@@ -40,7 +40,7 @@ Two halves communicating via Tauri IPC commands and broadcast events.
 ### Rust backend (`app/src-tauri/src/`)
 
 - **`lib.rs`** — Tauri builder, command registration, `setup()` hook that auto-syncs the catalog on every boot.
-- **`state.rs`** — `AppState` (single instance via `.manage()`): SQLite connection, MMOUI HTTP client, addons folder path, an async filesystem mutation lock, and `AtomicBool` sync guard. `AppState::run_sync()` owns the sync lifecycle events and is reused by auto-sync and the manual `sync_catalog` command.
+- **`state.rs`** — `AppState` (single instance via `.manage()`): SQLite connection, MMOUI HTTP client, addons folder path, and async locks for filesystem mutations and catalog sync. Startup, Settings, timed updates, and Installed Re-scan share the catalog sync lifecycle events.
 - **`api.rs`** — MMOUI v3 client. Discovers feed URLs via `globalconfig.json`. Fetches the catalog and downloads archives on demand using `fetch_addon_download_url` and `download_bytes`.
 - **`db.rs`** — SQLite catalog at `%APPDATA%/Apocrypha/catalog.db`. WAL mode. Idempotent `ALTER TABLE` migrations on `addons` for new columns (currently `thumbnail_url`, `images`). `find_by_directory` is the bridge from local installed dirs back to catalog entries.
 - **`scanner.rs`** — Walks `<Documents>/Elder Scrolls Online/live/AddOns/`, parses `.txt` / `.addon` manifests (`## Title`, `## Version`, `## DependsOn`, etc.). Strips ESO color codes (`|cRRGGBB...|r`) and handles lossy UTF-8.
@@ -91,7 +91,7 @@ On upgrade, the catalog database saves the cached listing version for legacy ins
 4. Emits `catalog:sync:done` with `CatalogMeta`.
 5. `App.tsx` bumps `catalogTick` → pages remount and re-fetch from SQLite.
 
-Sync happens on **every boot** by design. No TTL gating today — if you need one later, compare `metadata.last_synced` (RFC3339) against `Utc::now()` before kicking off the task in `lib.rs::setup`.
+Startup still syncs on every boot. Installed Re-scan uses `metadata.last_synced` (RFC3339) to reuse a catalog up to five minutes old. If the catalog is stale, Re-scan starts or waits for a refresh with a ten-second limit on network work or waiting. The local scan still runs if the refresh fails.
 
 ## Design system
 
