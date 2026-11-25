@@ -114,12 +114,6 @@ Design rule: Newsreader is reserved for the "APOCRYPHA" wordmark in the sidebar.
 - **Manifest and catalog versions differ regularly**. The author's `## Version:` inside `Foo.txt`/`Foo.addon` is independent of MMOUI's `UIVersion`. Fallback comparisons normalize separators and prefixes while preserving the digits in each component.
 - **Bundle size**: production build is ~265 KB JS, ~20 KB CSS, ~10 MB Rust binary. Stay frugal with new lucide icons (~1 KB each, but they add up if imported broadly).
 
-## Commits
-
-Project convention:
-- Commit messages in **English**, natural tone (no Conventional Commits ceremony)
-- **No Co-Authored-By trailers** in commit messages
-
 ## Publishing from a fork
 
 The release workflow uses `GITHUB_REPOSITORY` for the app update feed and the
