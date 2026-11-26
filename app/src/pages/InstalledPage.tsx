@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   ArrowDownAZ,
@@ -23,6 +23,7 @@ import type { Addon, InstalledAddon } from "@/lib/types";
 
 type InstalledStatus = "all" | "up-to-date" | "update-available" | "orphan" | "unused-library";
 type InstalledSort = "name" | "last-updated" | "last-released";
+type InstalledSelection = { dirName: string };
 
 const installedNameCollator = new Intl.Collator(undefined, { sensitivity: "base" });
 
@@ -57,8 +58,8 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
   const [status, setStatus] = useState<InstalledStatus>("all");
   const [sort, setSort] = useState<InstalledSort>("name");
 
-  const [selectedCatalogAddon, setSelectedCatalogAddon] = useState<Addon | null>(null);
-  const [selectedInstalled, setSelectedInstalled] = useState<InstalledAddon | null>(null);
+  const [selection, setSelection] = useState<InstalledSelection | null>(null);
+  const selectedDirName = selection?.dirName;
 
   const reload = useCallback(async () => {
     const scan = ++latestScan.current;
@@ -66,7 +67,12 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
     setError(null);
     try {
       const installed = await api.listInstalled();
-      if (scan === latestScan.current) setAddons(installed);
+      if (scan === latestScan.current) {
+        setAddons(installed);
+        setSelection((selected) =>
+          installed.some((addon) => addon.dir_name === selected?.dirName && addon.catalog_id) ? selected : null,
+        );
+      }
     } catch (error) {
       if (scan === latestScan.current) setError(String(error));
     } finally {
@@ -133,10 +139,7 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
             next.delete(e.payload.dir_name);
             return next;
           });
-          if (selectedInstalled?.dir_name === e.payload.dir_name) {
-            setSelectedCatalogAddon(null);
-            setSelectedInstalled(null);
-          }
+          setSelection((selected) => selected?.dirName === e.payload.dir_name ? null : selected);
           reload();
         }),
       );
@@ -152,9 +155,6 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
       );
     })();
     return () => unlisteners.forEach((fn) => fn());
-    // selectedInstalled is intentionally not in deps — we read its current value
-    // inside the listener via closure but never want to re-subscribe on selection change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload]);
 
   const handleUninstall = useCallback(async (addon: InstalledAddon) => {
@@ -185,20 +185,8 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
     }
   }, [onInstall]);
 
-  const handleSelect = useCallback(async (addon: InstalledAddon) => {
-    if (!addon.catalog_id) return;
-    setSelectedInstalled(addon);
-    try {
-      const catalog = await api.getAddonById(addon.catalog_id);
-      if (catalog) setSelectedCatalogAddon(catalog);
-    } catch (e) {
-      console.error("failed to load catalog data:", e);
-    }
-  }, []);
-
   const closePanel = useCallback(() => {
-    setSelectedCatalogAddon(null);
-    setSelectedInstalled(null);
+    setSelection(null);
   }, []);
 
   const updatesAvailable = useMemo(
@@ -246,20 +234,19 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
     setBulkProgress(null);
   }, [addons, onInstall]);
 
-  // Re-resolve selectedInstalled against the latest list so the panel reflects fresh data
-  // (version bumps, update_available flips) without the user having to reopen it.
+  // Resolve details and actions from the same row in the latest scan.
   const currentSelectedInstalled = useMemo(() => {
-    if (!selectedInstalled || !addons) return selectedInstalled;
-    return addons.find((a) => a.dir_name === selectedInstalled.dir_name) ?? null;
-  }, [selectedInstalled, addons]);
+    if (selectedDirName === undefined) return null;
+    return addons?.find((addon) => addon.dir_name === selectedDirName) ?? null;
+  }, [selectedDirName, addons]);
 
   const panelAction = useMemo(() => {
-    if (!selectedCatalogAddon || !currentSelectedInstalled) return null;
     const inst = currentSelectedInstalled;
+    if (!inst?.catalog_id) return null;
     if (uninstalling.has(inst.dir_name)) {
       return { kind: "uninstalling" } as const;
     }
-    if (inst.catalog_id && updatingCatalogIds.has(inst.catalog_id)) {
+    if (updatingCatalogIds.has(inst.catalog_id)) {
       return { kind: "updating" } as const;
     }
     if (inst.update_available && inst.catalog_version) {
@@ -269,7 +256,7 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
       } as const;
     }
     return { kind: "uninstall" } as const;
-  }, [selectedCatalogAddon, currentSelectedInstalled, uninstalling, updatingCatalogIds]);
+  }, [currentSelectedInstalled, uninstalling, updatingCatalogIds]);
 
   return (
     <div className="relative flex h-full">
@@ -409,10 +396,10 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
                   addon={a}
                   uninstalling={uninstalling.has(a.dir_name)}
                   updating={a.catalog_id ? updatingCatalogIds.has(a.catalog_id) : false}
-                  selected={selectedInstalled?.dir_name === a.dir_name}
+                  selected={selectedDirName === a.dir_name}
                   onUninstall={() => handleUninstall(a)}
                   onUpdate={() => handleUpdate(a)}
-                  onSelect={a.catalog_id ? () => handleSelect(a) : undefined}
+                  onSelect={a.catalog_id ? () => setSelection({ dirName: a.dir_name }) : undefined}
                 />
               ))}
             </div>
@@ -420,10 +407,11 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
         </div>
       </div>
 
-      {selectedCatalogAddon && currentSelectedInstalled && panelAction ? (
-        <AddonDetailPanel
-          key={selectedCatalogAddon.id}
-          addon={selectedCatalogAddon}
+      {selection && currentSelectedInstalled?.catalog_id && panelAction ? (
+        <InstalledAddonDetails
+          key={JSON.stringify([currentSelectedInstalled.dir_name, currentSelectedInstalled.catalog_id])}
+          selection={selection}
+          catalogId={currentSelectedInstalled.catalog_id}
           action={panelAction}
           installedDirName={currentSelectedInstalled.dir_name}
           installedAt={currentSelectedInstalled.installed_at}
@@ -435,6 +423,29 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
       ) : null}
     </div>
   );
+}
+
+function InstalledAddonDetails({ selection, catalogId, ...panelProps }:
+  Omit<ComponentProps<typeof AddonDetailPanel>, "addon"> & { selection: InstalledSelection; catalogId: string },
+) {
+  const [addon, setAddon] = useState<Addon | null>(null);
+
+  // Selecting the row again retries an unavailable catalog lookup.
+  useEffect(() => {
+    let active = true;
+    api.getAddonById(catalogId)
+      .then((catalog) => {
+        if (active && catalog?.id === catalogId) setAddon(catalog);
+      })
+      .catch((error) => {
+        if (active) console.error("failed to load catalog data:", error);
+      });
+    return () => {
+      active = false;
+    };
+  }, [catalogId, selection]);
+
+  return addon ? <AddonDetailPanel addon={addon} {...panelProps} /> : null;
 }
 
 function EmptyState({
