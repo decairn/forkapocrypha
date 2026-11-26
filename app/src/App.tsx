@@ -11,13 +11,15 @@ import { LegacyUninstallDialog } from "@/components/LegacyUninstallDialog";
 import { InstallConflictDialog } from "@/components/InstallConflictDialog";
 import { api } from "@/lib/api";
 import { useAppZoom } from "@/lib/useAppZoom";
+import { useInstalledScan } from "@/lib/useInstalledScan";
 import type { CatalogMeta, InstallConflictReview, LegacyUninstallFile, UninstallPreview } from "@/lib/types";
 
 function App() {
   const [page, setPage] = useState<PageId>("search");
   const { zoom, changeZoom } = useAppZoom();
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({ kind: "idle" });
-  const [catalogTick, setCatalogTick] = useState(0);
+  const [catalogRevision, setCatalogRevision] = useState(0);
+  const installedScan = useInstalledScan(page === "installed", catalogRevision);
   const [showWelcome, setShowWelcome] = useState(() => !welcomeAlreadyShown());
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
   const [uninstallReview, setUninstallReview] = useState<{
@@ -106,9 +108,9 @@ function App() {
         }),
       );
       unlisteners.push(
-        await listen<CatalogMeta>("catalog:sync:done", (e) => {
+        await listen<CatalogMeta & { revision: number }>("catalog:sync:done", (e) => {
           setSyncStatus({ kind: "done", addonCount: e.payload.addon_count });
-          setCatalogTick((t) => t + 1);
+          setCatalogRevision((revision) => Math.max(revision, e.payload.revision));
           doneTimer = setTimeout(() => setSyncStatus({ kind: "idle" }), 4000);
         }),
       );
@@ -182,11 +184,11 @@ function App() {
       <main className="relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]">
         <SyncBanner status={syncStatus} />
         <div className="flex-1 overflow-hidden">
-          {page === "search" && <SearchPage key={catalogTick} onInstall={requestInstall} onUninstall={requestUninstall} />}
+          {page === "search" && <SearchPage key={catalogRevision} onInstall={requestInstall} onUninstall={requestUninstall} />}
           {page === "installed" && (
-            <InstalledPage catalogTick={catalogTick} onInstall={requestInstall} onUninstall={requestUninstall} />
+            <InstalledPage scan={installedScan} onInstall={requestInstall} onUninstall={requestUninstall} />
           )}
-          {page === "settings" && <SettingsPage key={catalogTick} zoom={zoom} onZoomChange={changeZoom} />}
+          {page === "settings" && <SettingsPage key={catalogRevision} zoom={zoom} onZoomChange={changeZoom} />}
         </div>
       </main>
       <Toaster toasts={toasts} onDismiss={dismissToast} />

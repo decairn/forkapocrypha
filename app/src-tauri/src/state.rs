@@ -24,6 +24,7 @@ pub struct AppState {
     pub backups_dir: PathBuf,
     pub mmoui: MmouiClient,
     pub syncing: AsyncMutex<()>,
+    pub(crate) catalog_revision: AtomicU64,
     pub close_to_tray: AtomicBool,
     pub auto_update_interval_minutes: AtomicU64,
 }
@@ -31,6 +32,13 @@ pub struct AppState {
 const ADDONS_DIR_KEY: &str = "addons_dir_override";
 const RESCAN_CATALOG_MAX_AGE: chrono::TimeDelta = chrono::TimeDelta::minutes(5);
 const RESCAN_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(serde::Serialize)]
+struct CatalogSyncCompletion {
+    #[serde(flatten)]
+    meta: CatalogMeta,
+    revision: u64,
+}
 
 impl AppState {
     pub fn init() -> Result<Self> {
@@ -61,6 +69,7 @@ impl AppState {
             backups_dir,
             mmoui: MmouiClient::new(),
             syncing: AsyncMutex::new(()),
+            catalog_revision: AtomicU64::new(0),
             close_to_tray: AtomicBool::new(close_to_tray),
             auto_update_interval_minutes: AtomicU64::new(auto_update_interval),
         })
@@ -97,9 +106,10 @@ impl AppState {
             emit_sync_event(app, event)
         })
         .await
+        .map(|completion| completion.meta)
     }
 
-    pub async fn refresh_catalog_for_rescan(&self, app: &AppHandle) -> Result<()> {
+    pub async fn refresh_catalog_for_rescan(&self, app: &AppHandle) -> Result<u64> {
         refresh_if_stale(
             &self.syncing,
             || {
@@ -116,10 +126,12 @@ impl AppState {
             },
             RESCAN_REFRESH_TIMEOUT,
         )
-        .await
+        .await?;
+        // This revision is usable whether the re-scan refreshed, joined, or reused the cache.
+        Ok(self.catalog_revision.load(Ordering::Relaxed))
     }
 
-    async fn sync_catalog(&self, timeout: Option<Duration>) -> Result<CatalogMeta> {
+    async fn sync_catalog(&self, timeout: Option<Duration>) -> Result<CatalogSyncCompletion> {
         let fetch = async {
             let addons = self.mmoui.fetch_addons().await?;
             let categories = self.mmoui.fetch_categories().await?;
@@ -135,7 +147,9 @@ impl AppState {
         let mut conn = self.db.lock().unwrap();
         db::upsert_categories(&mut conn, &categories)?;
         db::upsert_addons(&mut conn, &addons)?;
-        db::catalog_meta(&conn)
+        let meta = db::catalog_meta(&conn)?;
+        let revision = self.catalog_revision.fetch_add(1, Ordering::Relaxed) + 1;
+        Ok(CatalogSyncCompletion { meta, revision })
     }
 }
 
@@ -211,13 +225,13 @@ async fn report_sync<T>(
     result
 }
 
-fn emit_sync_event(app: &AppHandle, event: SyncEvent<'_, CatalogMeta>) {
+fn emit_sync_event(app: &AppHandle, event: SyncEvent<'_, CatalogSyncCompletion>) {
     match event {
         SyncEvent::Start => {
             let _ = app.emit("catalog:sync:start", ());
         }
-        SyncEvent::Done(meta) => {
-            let _ = app.emit("catalog:sync:done", meta);
+        SyncEvent::Done(completion) => {
+            let _ = app.emit("catalog:sync:done", completion);
         }
         SyncEvent::Error(error) => {
             let _ = app.emit("catalog:sync:error", error.to_string());

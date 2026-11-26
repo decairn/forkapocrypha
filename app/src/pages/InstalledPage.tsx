@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   ArrowDownAZ,
@@ -20,6 +20,7 @@ import { AddonDetailPanel } from "@/components/AddonDetailPanel";
 import { SearchSelect } from "@/components/SearchSelect";
 import { api } from "@/lib/api";
 import type { Addon, InstalledAddon } from "@/lib/types";
+import type { useInstalledScan } from "@/lib/useInstalledScan";
 
 type InstalledStatus = "all" | "up-to-date" | "update-available" | "orphan" | "unused-library";
 type InstalledSort = "name" | "last-updated" | "last-released";
@@ -40,17 +41,12 @@ function localUpdateTime(addon: InstalledAddon): number {
   return Number.isNaN(time) ? -Infinity : time;
 }
 
-export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
-  catalogTick: number;
+export function InstalledPage({ scan, onInstall, onUninstall }: {
+  scan: ReturnType<typeof useInstalledScan>;
   onInstall: (addonId: string) => Promise<string[]>;
   onUninstall: (dirName: string) => Promise<boolean>;
 }) {
-  const [addons, setAddons] = useState<InstalledAddon[] | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [refreshingCatalog, setRefreshingCatalog] = useState(false);
-  const [catalogRefreshFailed, setCatalogRefreshFailed] = useState(false);
-  const latestScan = useRef(0);
+  const { addons, loading, error, refreshingCatalog, catalogRefreshFailed, reload, rescan } = scan;
   const [uninstalling, setUninstalling] = useState<Set<string>>(new Set());
   const [updatingCatalogIds, setUpdatingCatalogIds] = useState<Set<string>>(new Set());
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
@@ -61,43 +57,12 @@ export function InstalledPage({ catalogTick, onInstall, onUninstall }: {
   const [selection, setSelection] = useState<InstalledSelection | null>(null);
   const selectedDirName = selection?.dirName;
 
-  const reload = useCallback(async () => {
-    const scan = ++latestScan.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const installed = await api.listInstalled();
-      if (scan === latestScan.current) {
-        setAddons(installed);
-        setSelection((selected) =>
-          installed.some((addon) => addon.dir_name === selected?.dirName && addon.catalog_id) ? selected : null,
-        );
-      }
-    } catch (error) {
-      if (scan === latestScan.current) setError(String(error));
-    } finally {
-      if (scan === latestScan.current) setLoading(false);
-    }
-  }, []);
-
-  const rescan = useCallback(async () => {
-    setRefreshingCatalog(true);
-    setCatalogRefreshFailed(false);
-    try {
-      await api.refreshCatalogForRescan();
-    } catch (error) {
-      console.warn("Could not refresh the ESOUI catalog:", error);
-      setCatalogRefreshFailed(true);
-    } finally {
-      setRefreshingCatalog(false);
-    }
-    await reload();
-  }, [reload]);
-
   useEffect(() => {
-    setCatalogRefreshFailed(false);
-    reload();
-  }, [catalogTick, reload]);
+    if (!addons) return;
+    setSelection((selected) =>
+      addons.some((addon) => addon.dir_name === selected?.dirName && addon.catalog_id) ? selected : null,
+    );
+  }, [addons]);
 
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];

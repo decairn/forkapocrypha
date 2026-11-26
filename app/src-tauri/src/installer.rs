@@ -1773,6 +1773,7 @@ mod tests {
             backups_dir: temp.path().join("backups"),
             mmoui: crate::api::MmouiClient::new(),
             syncing: tokio::sync::Mutex::new(()),
+            catalog_revision: Default::default(),
             close_to_tray: AtomicBool::new(false),
             auto_update_interval_minutes: AtomicU64::new(0),
         });
@@ -1813,6 +1814,7 @@ mod tests {
             backups_dir: temp.path().join("backups"),
             mmoui: crate::api::MmouiClient::new(),
             syncing: tokio::sync::Mutex::new(()),
+            catalog_revision: Default::default(),
             close_to_tray: AtomicBool::new(false),
             auto_update_interval_minutes: AtomicU64::new(0),
         });
@@ -1978,6 +1980,7 @@ mod tests {
             backups_dir: temp.path().join("backups"),
             mmoui: crate::api::MmouiClient::new(),
             syncing: tokio::sync::Mutex::new(()),
+            catalog_revision: Default::default(),
             close_to_tray: AtomicBool::new(false),
             auto_update_interval_minutes: AtomicU64::new(0),
         })
@@ -2654,6 +2657,7 @@ mod tests {
             backups_dir: temp.path().join("backups"),
             mmoui: crate::api::MmouiClient::new(),
             syncing: tokio::sync::Mutex::new(()),
+            catalog_revision: Default::default(),
             close_to_tray: AtomicBool::new(false),
             auto_update_interval_minutes: AtomicU64::new(0),
         };

@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import type { Addon, InstalledAddon } from "@/lib/types";
+import { useInstalledScan } from "@/lib/useInstalledScan";
 import { InstalledPage } from "@/pages/InstalledPage";
 
 function listing(id: string, version: string): Addon {
@@ -68,7 +69,7 @@ beforeEach(() => {
   mockIPC((command, args) => {
     switch (command) {
       case "list_installed": return rows;
-      case "refresh_catalog_for_rescan": return undefined;
+      case "refresh_catalog_for_rescan": return 0;
       case "get_addon_details": return null;
       case "plugin:opener|open_url": return openUrl(args);
       case "get_addon_by_id": {
@@ -102,8 +103,13 @@ function panel() {
 }
 
 async function selectRow() {
-  await act(() => root.render(<InstalledPage catalogTick={0} onInstall={onInstall} onUninstall={onUninstall} />));
+  await act(() => root.render(<InstalledPageFixture />));
   await click(container.querySelector("article[role=button]"));
+}
+
+function InstalledPageFixture() {
+  const scan = useInstalledScan(true, 0);
+  return <InstalledPage scan={scan} onInstall={onInstall} onUninstall={onUninstall} />;
 }
 
 async function resolveListing(addon: Addon, result: Addon | null = addon) {
